@@ -575,6 +575,18 @@ elif menu == "📦 Order Portal": # Order Portal
 elif menu == "📦 Scrip Master":
     st.header("📦 Scrip Master")
     
+    # Live Indices Banner
+    st.subheader("🌕 Live Market Indices")
+    try:
+        live_indices = fetch_live_indices()
+        cols = st.columns(4)
+        for i, (label, price) in enumerate(live_indices.items()):
+            with cols[i]:
+                st.metric(label, price)
+    except Exception as e:
+        st.error(f"Error loading live indices: {e}")
+    st.divider()
+    
     SCRIP_MASTER_URL = "https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json"
     
     @st.cache_data(ttl=86400) # Cache for 24 hours
@@ -621,6 +633,41 @@ elif menu == "📦 Scrip Master":
             except:
                 pass
         return None
+    def fetch_live_indices():
+        indices = {
+            "NIFTY 50": "NIFTY_50",
+            "BANK NIFTY": "NIFTY_BANK",
+            "SENSEX": "SENSEX",
+            "FIN NIFTY": "NIFTY_FIN_SERVICE"
+        }
+        results = {}
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+        }
+        for label, symbol in indices.items():
+            url = f"https://www.google.com/finance/quote/{symbol}:INDEXNSE"
+            if "SENSEX" in symbol:
+                url = f"https://www.google.com/finance/quote/SENSEX:INDEXBOM"
+            
+            try:
+                response = requests.get(url, headers=headers, timeout=5)
+                if response.status_code == 200:
+                    match = re.search(r'data-last-price="([\d,.]+)"', response.text)
+                    if match:
+                        results[label] = match.group(1).replace(",", "")
+                        continue
+                    match = re.search(r'class="YMlS1d"[^>]*>([\d,.]+)<', response.text)
+                    if match:
+                        results[label] = match.group(1).replace(",", "")
+                        continue
+                    match = re.search(r'\]\],\"([\d,.]+)\",\"', response.text)
+                    if match:
+                        results[label] = match.group(1).replace(",", "")
+                        continue
+            except:
+                pass
+            results[label] = "N/A"
+        return results
 
     def get_flattrade_tsym(token_data):
         try:
