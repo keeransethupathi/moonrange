@@ -200,10 +200,16 @@ if menu == "📊 Dashboard":
         st.header("Systems Control")
         
         # Selection UI
-        exchange_mapping = {"NSE": 1, "NFO": 2, "MCX": 5, "BSE": 3, "CDS": 4}
-        selected_exchange_name = st.selectbox("Exchange", options=list(exchange_mapping.keys()), index=2) # Default MCX
+        exchange_mapping = {"NSE": 1, "NFO": 2, "MCX": 5, "BSE": 3, "CDS": 4, "BFO": 6}
+        exch_list = list(exchange_mapping.keys())
+        default_idx = exch_list.index(st.session_state.dashboard_exchange) if st.session_state.dashboard_exchange in exch_list else 2
+        
+        selected_exchange_name = st.selectbox("Exchange", options=exch_list, index=default_idx, key="dash_exch")
+        st.session_state.dashboard_exchange = selected_exchange_name
         exchange_type = exchange_mapping[selected_exchange_name]
-        token_id = st.text_input("Token ID", value="472789")
+        
+        token_id = st.text_input("Token ID", value=st.session_state.dashboard_token, key="dash_token")
+        st.session_state.dashboard_token = token_id
         
         st.divider()
         
@@ -273,18 +279,6 @@ if menu == "📊 Dashboard":
             st.session_state.mdi_data = []
             st.session_state.current_ltp = 0.0
             st.rerun()
-
-    # Dashboard Selection UI Updates (to support session state sync)
-    with st.sidebar:
-        exchange_mapping = {"NSE": 1, "NFO": 2, "MCX": 5, "BSE": 3, "CDS": 4, "BFO": 6}
-        exch_list = list(exchange_mapping.keys())
-        default_idx = exch_list.index(st.session_state.dashboard_exchange) if st.session_state.dashboard_exchange in exch_list else 2
-        selected_exchange_name = st.selectbox("Exchange", options=exch_list, index=default_idx, key="dash_exch")
-        st.session_state.dashboard_exchange = selected_exchange_name
-        exchange_type = exchange_mapping[selected_exchange_name]
-        
-        token_id = st.text_input("Token ID", value=st.session_state.dashboard_token, key="dash_token")
-        st.session_state.dashboard_token = token_id
 
     # Call Fragment for Live Updates
     display_dashboard_fragment(token_id, exchange_type, exchange_mapping)
