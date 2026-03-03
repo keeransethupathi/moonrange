@@ -43,7 +43,7 @@ def display_dashboard_fragment(token_id, exchange_type, exchange_mapping):
             if time.time() - last_update < 10:
                 st.session_state.backend_running = True
                 st.session_state.ohlc_data = data.get("ohlc", [])
-                st.session_state.vwma_data = data.get("vwma", [])
+                st.session_state.mdi_data = data.get("mdi", [])
                 st.session_state.current_ltp = float(data.get("ltp", 0.0))
                 st.session_state.last_data_ts = last_update
                 data_found = True
@@ -56,11 +56,11 @@ def display_dashboard_fragment(token_id, exchange_type, exchange_mapping):
     col1, col2 = st.columns(2)
     ltp = st.session_state.current_ltp
     ohlc = st.session_state.ohlc_data
-    vwma = st.session_state.vwma_data
+    mdi = st.session_state.mdi_data
     
-    latest_vwma = vwma[-1]['value'] if vwma else 0.0
+    latest_mdi = mdi[-1]['value'] if mdi else 0.0
     col1.metric("Current Price", f"₹{ltp:,.2f}")
-    col2.metric("VWMA (20)", f"₹{latest_vwma:,.2f}")
+    col2.metric("McGinley (20)", f"₹{latest_mdi:,.2f}")
     
     if ohlc:
         chart_options = {
@@ -74,8 +74,8 @@ def display_dashboard_fragment(token_id, exchange_type, exchange_mapping):
             "timeScale": {"timeVisible": True, "secondsVisible": True, "borderColor": '#485c7b'},
         }
         series = [{"type": 'Candlestick', "data": ohlc, "options": {"upColor": '#26a69a', "downColor": '#ef5350'}}]
-        if vwma:
-            series.append({"type": 'Line', "data": vwma, "options": {"color": '#2196f3', "lineWidth": 2, "title": 'VWMA'}})
+        if mdi:
+            series.append({"type": 'Line', "data": mdi, "options": {"color": '#2196f3', "lineWidth": 2, "title": 'McGinley Dynamic'}})
         
         # Rendering directly in the fragment (without .empty()) reduces flicker
         renderLightweightCharts([{"chart": chart_options, "series": series}], 'integrated_chart')
@@ -86,8 +86,8 @@ def display_dashboard_fragment(token_id, exchange_type, exchange_mapping):
     if st.session_state.auto_trading_active:
         try:
             # Re-read metrics for logic
-            vwma_val = vwma[-1]['value'] if vwma else None
-            if ltp and vwma_val:
+            mdi_val = mdi[-1]['value'] if mdi else None
+            if ltp and mdi_val:
                 tsym = st.session_state.get('trade_tsym')
                 num_lots = st.session_state.get('trade_num_lots', 1)
                 lot_size = st.session_state.get('trade_lot_size', 1)
@@ -96,15 +96,15 @@ def display_dashboard_fragment(token_id, exchange_type, exchange_mapping):
                 
                 if tsym and qty and exch:
                     side = None
-                    if ltp > vwma_val and st.session_state.last_order_side != 'BUY':
+                    if ltp > mdi_val and st.session_state.last_order_side != 'BUY':
                         side = 'B'
                         side_label = 'BUY'
-                    elif ltp < vwma_val and st.session_state.last_order_side != 'SELL':
+                    elif ltp < mdi_val and st.session_state.last_order_side != 'SELL':
                         side = 'S'
                         side_label = 'SELL'
                     
                     if side:
-                        log_msg = f"[{datetime.now().strftime('%H:%M:%S')}] Attempting {side_label} for {tsym} @ {ltp} (VWMA: {vwma_val:.2f})"
+                        log_msg = f"[{datetime.now().strftime('%H:%M:%S')}] Attempting {side_label} for {tsym} @ {ltp} (MDI: {mdi_val:.2f})"
                         st.session_state.trading_logs.append(log_msg)
                         response = place_flattrade_order(tsym, qty, exch, side)
                         
@@ -145,8 +145,8 @@ st.markdown("""
 # ================= STATE MANAGEMENT =================
 if 'ohlc_data' not in st.session_state:
     st.session_state.ohlc_data = []
-if 'vwma_data' not in st.session_state:
-    st.session_state.vwma_data = []
+if 'mdi_data' not in st.session_state:
+    st.session_state.mdi_data = []
 if 'current_ltp' not in st.session_state:
     st.session_state.current_ltp = 0.0
 if 'backend_running' not in st.session_state:
@@ -270,7 +270,7 @@ if menu == "📊 Dashboard":
         
         if st.button("🗑️ Reset Data"):
             st.session_state.ohlc_data = []
-            st.session_state.vwma_data = []
+            st.session_state.mdi_data = []
             st.session_state.current_ltp = 0.0
             st.rerun()
 
@@ -454,7 +454,7 @@ elif menu == "📦 Order Portal": # Order Portal
     def automation_monitor():
         # 1. Strategy Logic & Data Refresh
         ltp = 0.0
-        vwap = 0.0
+        mdi_val = 0.0
         data_available = False
         
         try:
@@ -464,9 +464,9 @@ elif menu == "📦 Order Portal": # Order Portal
                     data = json.load(f)
                 
                 ltp = data.get("ltp", 0.0)
-                vwma_data = data.get("vwma", [])
-                if vwma_data:
-                    vwap = vwma_data[-1].get("value", 0.0)
+                mdi_data = data.get("mdi", [])
+                if mdi_data:
+                    mdi_val = mdi_data[-1].get("value", 0.0)
                 data_available = True
                 
                 # 2. Strategy Logic: Crossover (only if active)
@@ -476,7 +476,7 @@ elif menu == "📦 Order Portal": # Order Portal
                     qty = st.session_state.trade_qty
                     exch = st.session_state.trade_exch
                     
-                    if current_phase == 'BUY' and ltp > vwap:
+                    if current_phase == 'BUY' and ltp > mdi_val:
                         res = place_flattrade_order(tsym, qty, exch, 'B')
                         if res.get('stat') == 'Ok':
                             st.session_state.trading_logs.append(f"[{datetime.now().strftime('%H:%M:%S')}] ✅ AUTO BUY: {tsym} @ {ltp}")
@@ -486,7 +486,7 @@ elif menu == "📦 Order Portal": # Order Portal
                         else:
                             st.session_state.trading_logs.append(f"[{datetime.now().strftime('%H:%M:%S')}] ❌ BUY FAILED: {res.get('emsg')}")
                     
-                    elif current_phase == 'SELL' and ltp < vwap:
+                    elif current_phase == 'SELL' and ltp < mdi_val:
                         res = place_flattrade_order(tsym, qty, exch, 'S')
                         if res.get('stat') == 'Ok':
                             st.session_state.trading_logs.append(f"[{datetime.now().strftime('%H:%M:%S')}] ✅ AUTO SELL: {tsym} @ {ltp}")
@@ -503,8 +503,8 @@ elif menu == "📦 Order Portal": # Order Portal
         with col_m1:
             st.subheader("Live Market Feed")
             if data_available:
-                st.metric("LTP", f"{ltp:.2f}", delta=f"{ltp-vwap:.2f} (vs VWAP)")
-                st.write(f"**VWAP:** {vwap:.2f}")
+                st.metric("LTP", f"{ltp:.2f}", delta=f"{ltp-mdi_val:.2f} (vs MDI)")
+                st.write(f"**MDI:** {mdi_val:.2f}")
             else:
                 st.info("Waiting for market data...")
         

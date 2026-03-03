@@ -181,12 +181,42 @@ def auto_login(creds=None, headless=False):
             print(f"Login click failed: {e}")
 
         # Wait for redirect and capture code
-        print("Waiting for redirect...")
+        print("Waiting for redirect and handling potential modals...")
         try:
-            # Wait for URL to contain 'code=' OR for page to show error
-            WebDriverWait(driver, 30).until(lambda d: "code=" in d.current_url or "error" in d.current_url.lower())
-        except:
-            print("Redirect timeout or potential error page")
+            # Wait for either the redirect URL OR the password change modal
+            def wait_for_login_result(d):
+                # 1. Check for success redirect
+                if "code=" in d.current_url:
+                    return True
+                
+                # 2. Check for the "Confirm Password Change" modal
+                try:
+                    confirm_btn = d.find_elements(By.XPATH, "//button[contains(., 'CONFIRM')]")
+                    if confirm_btn and confirm_btn[0].is_displayed():
+                        print("Detected 'Confirm Password Change' modal. Clicking CONFIRM...")
+                        d.execute_script("arguments[0].click();", confirm_btn[0])
+                        # After clicking, we continue waiting for the redirect
+                        return False 
+                except:
+                    pass
+                
+                # 3. Check for mandatory password change screen
+                try:
+                    if "Change password" in d.page_source or "new password" in d.page_source.lower():
+                        print("Detected mandatory password change screen.")
+                        return True
+                except:
+                    pass
+
+                # 4. Check for specific error messages on page
+                if "error" in d.current_url.lower():
+                    return True
+                    
+                return False
+
+            WebDriverWait(driver, 30).until(wait_for_login_result)
+        except Exception as we:
+            print(f"Wait for redirect/modal finished or timed out: {we}")
             
         current_url = driver.current_url
         print(f"Current URL: {current_url}")
@@ -196,9 +226,14 @@ def auto_login(creds=None, headless=False):
             print(f"Captured request_code: {request_code}")
             return {"status": "success", "code": request_code}
         else:
-            # Check for error message on the page
+            # 1. Check for mandatory password change screen specifically
+            if "Change password" in driver.page_source or "new password" in driver.page_source.lower():
+                return {"status": "error", "message": "Mandatory Password Reset Required. Please log in manually once to update your password."}
+
+            # 2. Check for other error messages on the page
             error_msg = "Failed to capture request_code from URL"
             try:
+                # Check for standard snackbars or alerts
                 alerts = driver.find_elements(By.XPATH, "//*[contains(@class, 'v-snack') or contains(@class, 'v-alert') or contains(@role, 'alert')]")
                 for alert in alerts:
                     if alert.is_displayed() and alert.text:

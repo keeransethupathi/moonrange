@@ -22,7 +22,8 @@ exchange_type = int(sys.argv[1]) if len(sys.argv) > 1 else default_exchange
 token_id = sys.argv[2] if len(sys.argv) > 2 else default_token
 
 TICK_BAR_SIZE = 5
-VWMA_PERIOD = 20
+MCGINLEY_PERIOD = 20
+MCGINLEY_K = 0.6
 TOKEN_LIST = [{"exchangeType": exchange_type, "tokens": [token_id]}]
 CORRELATION_ID = f"backend_{token_id}"
 DATA_FILE = "market_data.json"
@@ -33,7 +34,7 @@ class MarketDataBackend:
     def __init__(self):
         self.lock = threading.Lock()
         self.ohlc_bars = []
-        self.vwma_bars = []
+        self.mdi_bars = []
         self.raw_bars = []
         self.current_bar = {"open": None, "high": -float("inf"), "low": float("inf"), "close": None, "ticks": 0, "volume": 0}
         self.latest_ltp = 0.0
@@ -93,14 +94,23 @@ class MarketDataBackend:
                 self.ohlc_bars.append(bar)
                 self.raw_bars.append(bar)
                 
-                if len(self.raw_bars) >= VWMA_PERIOD:
-                    df = pd.DataFrame(self.raw_bars[-VWMA_PERIOD:])
-                    vwma_val = (df['close'] * df['volume']).sum() / df['volume'].sum()
-                    self.vwma_bars.append({"time": chart_time, "value": float(vwma_val)})
+                # McGinley Dynamic Logic
+                # Formula: MD = MD_prev + (Price - MD_prev) / (K * N * (Price / MD_prev)**4)
+                price = bar["close"]
+                if not self.mdi_bars:
+                    # Initialize with first close price
+                    self.mdi_bars.append({"time": chart_time, "value": price})
+                else:
+                    prev_mdi = self.mdi_bars[-1]["value"]
+                    # Prevent division by zero
+                    if prev_mdi == 0: prev_mdi = price
+                    
+                    mdi_val = prev_mdi + (price - prev_mdi) / (MCGINLEY_K * MCGINLEY_PERIOD * (price / prev_mdi)**4)
+                    self.mdi_bars.append({"time": chart_time, "value": float(mdi_val)})
                 
                 if len(self.ohlc_bars) > 500:
                     self.ohlc_bars.pop(0)
-                    if self.vwma_bars: self.vwma_bars.pop(0)
+                    if self.mdi_bars: self.mdi_bars.pop(0)
                 
                 self.current_bar = {"open": None, "high": -float("inf"), "low": float("inf"), "close": None, "ticks": 0, "volume": 0}
                 self.save_data()
@@ -110,7 +120,7 @@ class MarketDataBackend:
             data = {
                 "ltp": float(self.latest_ltp),
                 "ohlc": self.ohlc_bars,
-                "vwma": self.vwma_bars,
+                "mdi": self.mdi_bars,
                 "last_update": time.time(),
                 "token_id": str(token_id),
                 "exchange_type": int(exchange_type)
