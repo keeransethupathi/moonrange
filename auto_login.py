@@ -195,12 +195,24 @@ def auto_login(creds=None, headless=False):
                     if confirm_btn and confirm_btn[0].is_displayed():
                         print("Detected 'Confirm Password Change' modal. Clicking CONFIRM...")
                         d.execute_script("arguments[0].click();", confirm_btn[0])
-                        # After clicking, we continue waiting for the redirect
                         return False 
                 except:
                     pass
                 
-                # 3. Check for mandatory password change screen
+                # 3. Check for specific error messages on page (e.g. Invalid password, Invalid TOTP, etc.)
+                try:
+                    # Look for red error text or snackbars
+                    error_elements = d.find_elements(By.XPATH, "//*[contains(@class, 'error--text') or contains(@class, 'v-snack__content') or contains(@class, 'v-alert__content')]")
+                    for elem in error_elements:
+                        if elem.is_displayed() and elem.text:
+                            print(f"Page Error Detected: {elem.text}")
+                            # If we see a hard error, we can stop waiting
+                            if any(msg in elem.text.lower() for msg in ["invalid", "incorrect", "expired", "required"]):
+                                return True
+                except:
+                    pass
+
+                # 4. Check for mandatory password change screen
                 try:
                     if "Change password" in d.page_source or "new password" in d.page_source.lower():
                         print("Detected mandatory password change screen.")
@@ -208,8 +220,9 @@ def auto_login(creds=None, headless=False):
                 except:
                     pass
 
-                # 4. Check for specific error messages on page
+                # 5. Check for specific error messages in URL
                 if "error" in d.current_url.lower():
+                    print(f"Error detected in URL: {d.current_url}")
                     return True
                     
                 return False
@@ -245,9 +258,20 @@ def auto_login(creds=None, headless=False):
 
     except Exception as e:
         print(f"Automation error: {e}")
+        # Capture screenshot for debugging
+        if driver:
+            try:
+                if not os.path.exists('logs'):
+                    os.makedirs('logs')
+                screenshot_path = os.path.join('logs', f"login_error_{int(time.time())}.png")
+                driver.save_screenshot(screenshot_path)
+                print(f"Screenshot saved to {screenshot_path}")
+            except Exception as e2:
+                print(f"Failed to save screenshot: {e2}")
         return {"status": "error", "message": str(e)}
     finally:
-        driver.quit()
+        if driver:
+            driver.quit()
 
 def generate_access_token(request_code):
     # Try environment variables first

@@ -118,39 +118,8 @@ def display_dashboard_fragment(token_id, exchange_type, exchange_mapping):
     else:
         st.info("Connected. Waiting for the first bar (5 ticks)...")
             
-    # ================= AUTOMATED TRADING LOGIC =================
-    if st.session_state.auto_trading_active:
-        try:
-            # Re-read metrics for logic
-            mdi_val = mdi[-1]['value'] if mdi else None
-            if ltp and mdi_val:
-                tsym = st.session_state.get('trade_tsym')
-                num_lots = st.session_state.get('trade_num_lots', 1)
-                lot_size = st.session_state.get('trade_lot_size', 1)
-                qty = num_lots * lot_size
-                exch = st.session_state.get('trade_exch')
-                
-                if tsym and qty and exch:
-                    side = None
-                    if ltp > mdi_val and st.session_state.last_order_side != 'BUY':
-                        side = 'B'
-                        side_label = 'BUY'
-                    elif ltp < mdi_val and st.session_state.last_order_side != 'SELL':
-                        side = 'S'
-                        side_label = 'SELL'
-                    
-                    if side:
-                        log_msg = f"[{datetime.now().strftime('%H:%M:%S')}] Attempting {side_label} for {tsym} @ {ltp} (MDI: {mdi_val:.2f})"
-                        st.session_state.trading_logs.append(log_msg)
-                        response = place_flattrade_order(tsym, qty, exch, side)
-                        
-                        if response.get('stat') == 'Ok':
-                            st.session_state.last_order_side = side_label
-                            st.session_state.trading_logs.append(f"✅ {side_label} Order Placed! ID: {response.get('norenordno')}")
-                        else:
-                            st.session_state.trading_logs.append(f"❌ Order Failed: {response.get('emsg')}")
-        except Exception as e:
-            st.session_state.trading_logs.append(f"⚠️ Trading logic error: {e}")
+    # Trading logic is consolidated in the automation_monitor fragment in 'Order Portal'
+    # to avoid duplicate executions and ensure consistent state management.
 
     if not data_found:
         if os.path.exists(DATA_FILE):
@@ -502,29 +471,41 @@ elif menu == "📦 Order Portal": # Order Portal
                 # 2. Strategy Logic: Crossover (only if active)
                 if st.session_state.auto_trading_active:
                     current_phase = st.session_state.trading_phase
-                    tsym = st.session_state.trade_tsym
-                    qty = st.session_state.trade_qty
-                    exch = st.session_state.trade_exch
+                    tsym = st.session_state.get('trade_tsym')
+                    qty = st.session_state.get('trade_qty', 0)
+                    exch = st.session_state.get('trade_exch')
                     
-                    if current_phase == 'BUY' and ltp > mdi_val:
-                        res = place_flattrade_order(tsym, qty, exch, 'B')
-                        if res.get('stat') == 'Ok':
-                            st.session_state.trading_logs.append(f"[{datetime.now().strftime('%H:%M:%S')}] ✅ AUTO BUY: {tsym} @ {ltp}")
-                            st.session_state.trading_phase = 'SELL'
-                            st.session_state.last_order_side = f"BUY @ {ltp}"
-                            st.rerun()
-                        else:
-                            st.session_state.trading_logs.append(f"[{datetime.now().strftime('%H:%M:%S')}] ❌ BUY FAILED: {res.get('emsg')}")
-                    
-                    elif current_phase == 'SELL' and ltp < mdi_val:
-                        res = place_flattrade_order(tsym, qty, exch, 'S')
-                        if res.get('stat') == 'Ok':
-                            st.session_state.trading_logs.append(f"[{datetime.now().strftime('%H:%M:%S')}] ✅ AUTO SELL: {tsym} @ {ltp}")
-                            st.session_state.trading_phase = 'BUY'
-                            st.session_state.last_order_side = f"SELL @ {ltp}"
-                            st.rerun()
-                        else:
-                            st.session_state.trading_logs.append(f"[{datetime.now().strftime('%H:%M:%S')}] ❌ SELL FAILED: {res.get('emsg')}")
+                    if tsym and qty > 0 and exch:
+                        # STATE 1: WAIT FOR DIP (Price must go below MDI first)
+                        if current_phase == 'WAIT_FOR_DIP':
+                            if ltp < mdi_val:
+                                st.session_state.trading_logs.append(f"[{datetime.now().strftime('%H:%M:%S')}] 📉 Price below MDI ({ltp:.2f} < {mdi_val:.2f}). Strategy ARMED for BUY.")
+                                st.session_state.trading_phase = 'BUY'
+                                st.rerun()
+                        
+                        # STATE 2: BUY (Armed, waiting for cross above)
+                        elif current_phase == 'BUY' and ltp > mdi_val:
+                            res = place_flattrade_order(tsym, qty, exch, 'B')
+                            if res.get('stat') == 'Ok':
+                                st.session_state.trading_logs.append(f"[{datetime.now().strftime('%H:%M:%S')}] ✅ AUTO BUY: {tsym} @ {ltp} (Price crossed above MDI: {mdi_val:.2f})")
+                                st.session_state.trading_phase = 'SELL'
+                                st.session_state.last_order_side = f"BUY @ {ltp}"
+                                st.rerun()
+                            else:
+                                st.session_state.trading_logs.append(f"[{datetime.now().strftime('%H:%M:%S')}] ❌ BUY FAILED: {res.get('emsg')}")
+                        
+                        # STATE 3: SELL (Bought, waiting for cross below)
+                        elif current_phase == 'SELL' and ltp < mdi_val:
+                            res = place_flattrade_order(tsym, qty, exch, 'S')
+                            if res.get('stat') == 'Ok':
+                                st.session_state.trading_logs.append(f"[{datetime.now().strftime('%H:%M:%S')}] ✅ AUTO SELL: {tsym} @ {ltp} (Price crossed below MDI: {mdi_val:.2f})")
+                                st.session_state.trading_phase = 'WAIT_FOR_DIP' # RESET to wait for next cycle
+                                st.session_state.last_order_side = f"SELL @ {ltp}"
+                                st.rerun()
+                            else:
+                                st.session_state.trading_logs.append(f"[{datetime.now().strftime('%H:%M:%S')}] ❌ SELL FAILED: {res.get('emsg')}")
+                    else:
+                        if not tsym: st.session_state.trading_logs.append(f"⚠️ Strategy warning: tsym missing.")
         except Exception as e:
             st.session_state.trading_logs.append(f"⚠️ Monitor Error: {e}")
 
@@ -577,8 +558,16 @@ elif menu == "📦 Order Portal": # Order Portal
         m_c1, m_c2 = st.columns(2)
         with m_c1:
             st.write("**Next Action:**")
-            color = "#26a69a" if st.session_state.trading_phase == 'BUY' else "#ef5350"
-            st.markdown(f"<h3 style='color: {color}; margin:0;'>{st.session_state.trading_phase}</h3>", unsafe_allow_html=True)
+            if st.session_state.trading_phase == 'WAIT_FOR_DIP':
+                color = "#58a6ff"
+                label = "WAIT FOR DIP"
+            elif st.session_state.trading_phase == 'BUY':
+                color = "#26a69a"
+                label = "BUY ON CROSS"
+            else:
+                color = "#ef5350"
+                label = "SELL ON CROSS"
+            st.markdown(f"<h3 style='color: {color}; margin:0;'>{label}</h3>", unsafe_allow_html=True)
         with m_c2:
             st.write("**Status:**")
             st.write("🟢 Active" if st.session_state.auto_trading_active else "🔴 Paused")
@@ -591,10 +580,26 @@ elif menu == "📦 Order Portal": # Order Portal
                     st.error("Backend System is Offline! Start it in the Dashboard first.")
                 else:
                     st.session_state.auto_trading_active = True
-                    st.session_state.trading_logs.append(f"[{datetime.now().strftime('%H:%M:%S')}] 🤖 Strategy Activated.")
+                    st.session_state.trading_phase = 'WAIT_FOR_DIP' # INITIAL STATE
+                    st.session_state.last_order_side = None
+                    st.session_state.trading_logs.append(f"[{datetime.now().strftime('%H:%M:%S')}] 🤖 Strategy Activated. Waiting for price code dip below MDI...")
                     st.rerun()
         else:
             if st.button("🛑 STOP AUTO TRADING", type="secondary", use_container_width=True):
+                # AUTO CLOSE: If a BUY order was placed (phase is SELL), apply a SELL order before stopping
+                if st.session_state.trading_phase == 'SELL':
+                    tsym = st.session_state.get('trade_tsym')
+                    qty = st.session_state.get('trade_qty', 0)
+                    exch = st.session_state.get('trade_exch')
+                    
+                    if tsym and qty > 0 and exch:
+                        st.session_state.trading_logs.append(f"[{datetime.now().strftime('%H:%M:%S')}] 🛑 Stopping. Closing open position first...")
+                        res = place_flattrade_order(tsym, qty, exch, 'S')
+                        if res.get('stat') == 'Ok':
+                            st.session_state.trading_logs.append(f"[{datetime.now().strftime('%H:%M:%S')}] ✅ AUTO SELL (STOP-CLOSE): {tsym} @ Market")
+                        else:
+                            st.session_state.trading_logs.append(f"[{datetime.now().strftime('%H:%M:%S')}] ❌ STOP-CLOSE FAILED: {res.get('emsg')}")
+                
                 st.session_state.auto_trading_active = False
                 st.session_state.trading_logs.append(f"[{datetime.now().strftime('%H:%M:%S')}] 🛑 Strategy Stopped.")
                 st.rerun()
