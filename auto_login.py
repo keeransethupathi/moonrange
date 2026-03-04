@@ -51,38 +51,41 @@ def auto_login(creds=None, headless=False, log_func=None):
     # Setup Selenium
     chrome_options = Options()
     if headless:
-        chrome_options.add_argument("--headless")
+        chrome_options.add_argument("--headless=new") # Use the latest headless mode
+        chrome_options.add_argument("--window-size=1920,1080")
+        chrome_options.add_argument("--disable-gpu")
         chrome_options.add_argument("--no-sandbox")
         chrome_options.add_argument("--disable-dev-shm-usage")
+        # Anti-bot detection
+        chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36")
+        chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
+        chrome_options.add_experimental_option('useAutomationExtension', False)
         
     driver = None
     try:
         # Navigate to login page
         auth_url = f"https://auth.flattrade.in/?app_key={creds['api_key']}"
         
-        # Setup Selenium with better error handling for cloud environments
-        chrome_options = Options()
-        if headless:
-            chrome_options.add_argument("--headless")
-            chrome_options.add_argument("--no-sandbox")
-            chrome_options.add_argument("--disable-dev-shm-usage")
-            chrome_options.add_argument("--disable-gpu")
-
         try:
-            # First try standard ChromeDriverManager
-            driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=chrome_options)
+            # Try standard execution first
+            driver = webdriver.Chrome(options=chrome_options)
         except Exception as e:
-            print(f"Standard ChromeDriver failed, trying system chromium: {e}")
-            # Fallback for Streamlit Cloud (Linux)
+            # Fallback for Streamlit Cloud (Linux) or missing manager
             try:
-                chrome_options.binary_location = "/usr/bin/chromium"
-                service = Service("/usr/bin/chromedriver")
-                driver = webdriver.Chrome(service=service, options=chrome_options)
+                from selenium.webdriver.chrome.service import Service
+                from webdriver_manager.chrome import ChromeDriverManager
+                driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=chrome_options)
             except Exception as e2:
-                print(f"System chromium failed: {e2}")
-                # Last ditch effort: try without service path
-                chrome_options.binary_location = "/usr/bin/chromium-browser"
-                driver = webdriver.Chrome(options=chrome_options)
+                try:
+                    # Linux/Streamlit environment specific fallback
+                    chrome_options.binary_location = "/usr/bin/chromium"
+                    driver = webdriver.Chrome(service=Service("/usr/bin/chromedriver"), options=chrome_options)
+                except Exception as e3:
+                    log(f"All ChromeDriver attempts failed: {e3}")
+                    return {"status": "error", "message": f"Selenium setup failed: {e3}"}
+
+        # Disable webdriver flag via script
+        driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
 
         driver.get(auth_url)
         log(f"Navigated to login page: {auth_url.split('=')[0]}=...")
@@ -180,7 +183,15 @@ def auto_login(creds=None, headless=False, log_func=None):
                         log("Clicked login button via backup XPath")
                         break
                     except:
-                        pass
+                        # Third fallback: Press Enter on the last input
+                        try:
+                            last_input = driver.switch_to.active_element
+                            if last_input:
+                                last_input.send_keys(Keys.ENTER)
+                                log("Submitted form via Enter key")
+                                break
+                        except:
+                            pass
                 time.sleep(1)
         except Exception as e:
             log(f"Login click failed: {e}")
@@ -244,6 +255,14 @@ def auto_login(creds=None, headless=False, log_func=None):
             log(f"Captured request_code: {request_code}")
             return {"status": "success", "code": request_code}
         else:
+            # CAPTURE SCREENSHOT ON ALL REDIRECT FAILURES
+            try:
+                if not os.path.exists('logs'): os.makedirs('logs')
+                sp = os.path.join('logs', f"login_fail_{int(time.time())}.png")
+                driver.save_screenshot(sp)
+                log(f"DEBUG: Screenshot captured at {sp}")
+            except: pass
+
             # 1. Check for mandatory password change screen specifically
             if "Change password" in driver.page_source or "new password" in driver.page_source.lower():
                 return {"status": "error", "message": "Mandatory Password Reset Required. Please log in manually once to update your password."}
