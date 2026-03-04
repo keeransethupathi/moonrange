@@ -407,6 +407,44 @@ elif menu == "📈 Flattrade Login": # Flattrade Login
             st.exception(e)
 
     st.divider()
+    
+    # Credential Manager
+    with st.expander("🔐 Credential Manager"):
+        st.write("Update your Flattrade credentials below. Changes will be saved to `credentials.json`.")
+        
+        # Load current credentials
+        curr_creds = {}
+        if os.path.exists('credentials.json'):
+            try:
+                with open('credentials.json', 'r') as f:
+                    curr_creds = json.load(f)
+            except:
+                pass
+        
+        with st.form("credential_manager_form"):
+            new_user = st.text_input("Username", value=curr_creds.get('username', ''))
+            new_pass = st.text_input("Password", value=curr_creds.get('password', ''), type="password")
+            new_totp = st.text_input("TOTP Key", value=curr_creds.get('totp_key', ''), type="password")
+            
+            if st.form_submit_button("💾 UPDATE CREDENTIALS", use_container_width=True):
+                if new_user and new_pass and new_totp:
+                    # Update credentials.json
+                    curr_creds['username'] = new_user
+                    curr_creds['password'] = new_pass
+                    curr_creds['totp_key'] = new_totp
+                    
+                    # Also ensure api keys are preserved if they exist in the file but aren't in the form
+                    
+                    with open('credentials.json', 'w') as f:
+                        json.dump(curr_creds, f, indent=4)
+                    
+                    st.success("Credentials updated successfully!")
+                    time.sleep(1)
+                    st.rerun()
+                else:
+                    st.error("All fields are required.")
+
+    st.divider()
     st.subheader("📂 Manual Login (Fallback)")
     st.info("Follow these steps if automated login fails:")
     st.markdown(f"1. Open the [Flattrade Auth URL]({AUTH_URL}) in your browser.")
