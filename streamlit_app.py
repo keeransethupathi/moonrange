@@ -433,8 +433,6 @@ elif menu == "📈 Flattrade Login": # Flattrade Login
                     curr_creds['password'] = new_pass
                     curr_creds['totp_key'] = new_totp
                     
-                    # Also ensure api keys are preserved if they exist in the file but aren't in the form
-                    
                     with open('credentials.json', 'w') as f:
                         json.dump(curr_creds, f, indent=4)
                     
