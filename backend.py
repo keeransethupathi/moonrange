@@ -22,8 +22,8 @@ exchange_type = int(sys.argv[1]) if len(sys.argv) > 1 else default_exchange
 token_id = sys.argv[2] if len(sys.argv) > 2 else default_token
 
 TICK_BAR_SIZE = 5
-MCGINLEY_PERIOD = 20
-MCGINLEY_K = 0.6
+VIDYA_PERIOD = 20
+CMO_PERIOD = 9
 TOKEN_LIST = [{"exchangeType": exchange_type, "tokens": [token_id]}]
 CORRELATION_ID = f"backend_{token_id}"
 DATA_FILE = "market_data.json"
@@ -34,7 +34,7 @@ class MarketDataBackend:
     def __init__(self):
         self.lock = threading.Lock()
         self.ohlc_bars = []
-        self.mdi_bars = []
+        self.vwma_bars = []
         self.raw_bars = []
         self.current_bar = {"open": None, "high": -float("inf"), "low": float("inf"), "close": None, "ticks": 0, "volume": 0}
         self.latest_ltp = 0.0
@@ -81,8 +81,8 @@ class MarketDataBackend:
             self.current_bar["volume"] += qty
 
             if self.current_bar["ticks"] >= TICK_BAR_SIZE:
-                # Add 5 hours 30 minutes (19800 seconds) for IST display correction
-                chart_time = int(ts.timestamp()) + 19800
+                # Use raw UTC timestamp for chart consistency
+                chart_time = int(ts.timestamp())
                 bar = {
                     "time": chart_time,
                     "open": self.current_bar["open"],
@@ -94,23 +94,24 @@ class MarketDataBackend:
                 self.ohlc_bars.append(bar)
                 self.raw_bars.append(bar)
                 
-                # McGinley Dynamic Logic
-                # Formula: MD = MD_prev + (Price - MD_prev) / (K * N * (Price / MD_prev)**4)
-                price = bar["close"]
-                if not self.mdi_bars:
-                    # Initialize with first close price
-                    self.mdi_bars.append({"time": chart_time, "value": price})
+                # VWMA Logic (Volume Weighted Moving Average - 20 period)
+                VWMA_PERIOD = 20
+                if len(self.ohlc_bars) >= VWMA_PERIOD:
+                    subset = self.ohlc_bars[-VWMA_PERIOD:]
+                    pv_sum = sum(b["close"] * b["volume"] for b in subset)
+                    v_sum = sum(b["volume"] for b in subset)
+                    vwma_val = float(pv_sum / v_sum) if v_sum > 0 else bar["close"]
+                    self.vwma_bars.append({"time": chart_time, "value": vwma_val})
                 else:
-                    prev_mdi = self.mdi_bars[-1]["value"]
-                    # Prevent division by zero
-                    if prev_mdi == 0: prev_mdi = price
-                    
-                    mdi_val = prev_mdi + (price - prev_mdi) / (MCGINLEY_K * MCGINLEY_PERIOD * (price / prev_mdi)**4)
-                    self.mdi_bars.append({"time": chart_time, "value": float(mdi_val)})
-                
+                    # Initializing: use cumulative if < 20
+                    pv_sum = sum(b["close"] * b["volume"] for b in self.ohlc_bars)
+                    v_sum = sum(b["volume"] for b in self.ohlc_bars)
+                    vwma_val = float(pv_sum / v_sum) if v_sum > 0 else bar["close"]
+                    self.vwma_bars.append({"time": chart_time, "value": vwma_val})
+
                 if len(self.ohlc_bars) > 500:
                     self.ohlc_bars.pop(0)
-                    if self.mdi_bars: self.mdi_bars.pop(0)
+                    if self.vwma_bars: self.vwma_bars.pop(0)
                 
                 self.current_bar = {"open": None, "high": -float("inf"), "low": float("inf"), "close": None, "ticks": 0, "volume": 0}
                 self.save_data()
@@ -120,16 +121,24 @@ class MarketDataBackend:
             data = {
                 "ltp": float(self.latest_ltp),
                 "ohlc": self.ohlc_bars,
-                "mdi": self.mdi_bars,
+                "vwma": self.vwma_bars,
+                "version": "4.0",
                 "last_update": time.time(),
                 "token_id": str(token_id),
                 "exchange_type": int(exchange_type)
             }
-            # Save locally
+            # Save locally with retry logic for Windows file locks
             temp_file = DATA_FILE + ".tmp"
             with open(temp_file, "w") as f:
                 json.dump(data, f)
-            os.replace(temp_file, DATA_FILE)
+            
+            # Use small retry loop for os.replace to handle Windows file locking issues
+            for _ in range(3):
+                try:
+                    os.replace(temp_file, DATA_FILE)
+                    break
+                except PermissionError:
+                    time.sleep(0.1)
             
             # (Firebase code removed)
                 
