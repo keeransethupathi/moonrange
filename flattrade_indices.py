@@ -73,29 +73,35 @@ class FlattradeIndicesBackend:
             time.sleep(10)
 
     def load_auth(self):
-        if not os.path.exists(AUTH_FILE):
-            print(f"Error: {AUTH_FILE} not found.")
-            return False
-            
-        with open(AUTH_FILE, "r") as f:
-            auth_data = json.load(f)
-            self.jkey = auth_data.get("token")
+        # Try local file first
+        if os.path.exists(AUTH_FILE):
+            with open(AUTH_FILE, "r") as f:
+                auth_data = json.load(f)
+                self.jkey = auth_data.get("token")
+        
+        # Fallback to environment variable
+        if not self.jkey:
+            self.jkey = os.environ.get("FT_TOKEN")
             
         if not self.jkey:
-            print("Error: No token found in auth file.")
+            print(f"Error: Access token not found (file or FT_TOKEN env var).")
             return False
 
-        # Load UID
+        # Load UID from local file
         if os.path.exists(CREDS_FILE):
-            with open(CREDS_FILE, "r") as f:
-                creds = json.load(f)
-                self.uid = creds.get("username")
+            try:
+                with open(CREDS_FILE, "r") as f:
+                    creds = json.load(f)
+                    self.uid = creds.get("username")
+            except:
+                pass
         
+        # Fallback to environment variable
         if not self.uid:
             self.uid = os.environ.get("FT_USERNAME")
 
         if not self.uid:
-            print("Error: User ID not found.")
+            print("Error: User ID not found (file or FT_USERNAME env var).")
             return False
             
         return True

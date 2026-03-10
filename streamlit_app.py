@@ -58,10 +58,15 @@ def launch_indices_backend(force=False):
     
     if force or (time.time() - last_update > 60):
         try:
-            # Check if flattrade_auth exists before launching
-            if os.path.exists("flattrade_auth.json"):
-                subprocess.Popen([sys.executable, "flattrade_indices.py"], 
-                                creationflags=subprocess.CREATE_NEW_CONSOLE)
+            # Check if auth exists (file or secret)
+            has_auth = os.path.exists("flattrade_auth.json") or safe_get_secret("FT_TOKEN")
+            if has_auth:
+                cmd = [sys.executable, "flattrade_indices.py"]
+                if sys.platform == "win32":
+                    subprocess.Popen(cmd, creationflags=subprocess.CREATE_NEW_CONSOLE)
+                else:
+                    # Linux (Streamlit Cloud)
+                    subprocess.Popen(cmd, start_new_session=True)
                 return True
         except Exception as e:
             print(f"Launch error: {e}")
