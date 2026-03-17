@@ -125,9 +125,22 @@ def display_dashboard_fragment(token_id, exchange_type, exchange_mapping):
                 # Apply IST offset (+5:30) for chart display
                 IST_OFFSET = 19800 # 5.5 hours in seconds
                 st.session_state.ohlc_data = [{**b, "time": b["time"] + IST_OFFSET} for b in data.get("ohlc", [])]
-                st.session_state.alma_data = [{**b, "time": b["time"] + IST_OFFSET} for b in data.get("alma", [])]
+                st.session_state.ema_data = [{**b, "time": b["time"] + IST_OFFSET} for b in data.get("ema", [])]
+                
+                # Supertrend needs special handling to format the colors for the chart based on the trend
+                st_data_raw = data.get("supertrend", [])
+                st_formatted = []
+                for b in st_data_raw:
+                    # Color the line green for uptrend (1), red for downtrend (-1)
+                    color = '#4caf50' if b.get('trend', 1) == 1 else '#f44336'
+                    st_formatted.append({"time": b["time"] + IST_OFFSET, "value": b["value"], "color": color})
+                
+                st.session_state.supertrend_data = st_formatted
                 
                 st.session_state.current_ltp = float(data.get("ltp", 0.0))
+                st.session_state.live_ema = float(data.get("live_ema", 0.0))
+                st.session_state.live_strend = float(data.get("live_strend", 0.0))
+                st.session_state.live_trend = data.get("live_trend", 1)
                 st.session_state.last_data_ts = last_update
                 data_found = True
             else:
@@ -136,14 +149,24 @@ def display_dashboard_fragment(token_id, exchange_type, exchange_mapping):
         print(f"Local Sync Error: {fe}")
 
     # Layout
-    col1, col2 = st.columns(2)
+    col1, col2, col3 = st.columns(3)
     ltp = st.session_state.current_ltp
     ohlc = st.session_state.ohlc_data
-    alma = st.session_state.get("alma_data", [])
+    ema = st.session_state.get("ema_data", [])
+    strend = st.session_state.get("supertrend_data", [])
     
-    latest_alma = alma[-1]['value'] if alma else 0.0
+    # Use live unclosed indicators if available, else fallback to last closed bar
+    latest_ema = st.session_state.get("live_ema", 0.0)
+    if latest_ema == 0.0 and ema:
+        latest_ema = ema[-1]['value']
+        
+    latest_strend = st.session_state.get("live_strend", 0.0)
+    if latest_strend == 0.0 and strend:
+        latest_strend = strend[-1]['value']
+    
     col1.metric("Price", f"₹{ltp:,.2f}")
-    col2.metric("ALMA (200)", f"₹{latest_alma:,.2f}")
+    col2.metric("EMA (200)", f"₹{latest_ema:,.2f}")
+    col3.metric("Supertrend", f"₹{latest_strend:,.2f}")
     
     if ohlc:
         chart_options = {
@@ -157,13 +180,16 @@ def display_dashboard_fragment(token_id, exchange_type, exchange_mapping):
             "timeScale": {"timeVisible": True, "secondsVisible": True, "borderColor": '#485c7b'},
         }
         series = [{"type": 'Candlestick', "data": ohlc, "options": {"upColor": '#26a69a', "downColor": '#ef5350'}}]
-        if alma:
-            series.append({"type": 'Line', "data": alma, "options": {"color": '#ffeb3b', "lineWidth": 2, "title": 'ALMA'}})
+        if ema:
+            series.append({"type": 'Line', "data": ema, "options": {"color": '#2962FF', "lineWidth": 2, "title": 'EMA 200'}})
+        if strend:
+            # We use a Line series that supports individual point colors
+            series.append({"type": 'Line', "data": strend, "options": {"lineWidth": 2, "title": 'Supertrend'}})
         
         # Rendering directly in the fragment (without .empty()) reduces flicker
         renderLightweightCharts([{"chart": chart_options, "series": series}], 'integrated_chart')
     else:
-        st.info("Connected. Waiting for the first bar (5 ticks)...")
+        st.info("Connected. Waiting for the first Range 1R bar...")
             
     # Trading logic is consolidated in the automation_monitor fragment in 'Order Portal'
     # to avoid duplicate executions and ensure consistent state management.
@@ -197,10 +223,16 @@ st.markdown("""
 # ================= STATE MANAGEMENT =================
 if 'ohlc_data' not in st.session_state:
     st.session_state.ohlc_data = []
-if 'alma_data' not in st.session_state:
-    st.session_state.alma_data = []
-if 'alma_slope' not in st.session_state:
-    st.session_state.alma_slope = 0.0
+if 'ema_data' not in st.session_state:
+    st.session_state.ema_data = []
+if 'supertrend_data' not in st.session_state:
+    st.session_state.supertrend_data = []
+if 'live_ema' not in st.session_state:
+    st.session_state.live_ema = 0.0
+if 'live_strend' not in st.session_state:
+    st.session_state.live_strend = 0.0
+if 'live_trend' not in st.session_state:
+    st.session_state.live_trend = 1
 if 'current_ltp' not in st.session_state:
     st.session_state.current_ltp = 0.0
 if 'backend_running' not in st.session_state:
@@ -330,8 +362,10 @@ if menu == "📊 Dashboard":
         
         if st.button("🗑️ Reset Data"):
             st.session_state.ohlc_data = []
-            st.session_state.alma_data = []
-            st.session_state.alma_slope = 0.0
+            st.session_state.ema_data = []
+            st.session_state.supertrend_data = []
+            st.session_state.live_ema = 0.0
+            st.session_state.live_strend = 0.0
             st.session_state.current_ltp = 0.0
             st.rerun()
 
@@ -546,7 +580,6 @@ elif menu == "📦 Order Portal": # Order Portal
     def automation_monitor():
         # 1. Strategy Logic & Data Refresh
         ltp = 0.0
-        kama_val = 0.0
         data_available = False
         
         try:
@@ -556,11 +589,25 @@ elif menu == "📦 Order Portal": # Order Portal
                     data = json.load(f)
                 
                 ltp = data.get("ltp", 0.0)
-                alma_data = data.get("alma", [])
-                alma_val = alma_data[-1].get("value", 0.0) if alma_data else 0.0
+                strend_data = data.get("supertrend", [])
+                
+                # Fetch live indicators if available dynamically
+                if "live_strend" in data and data["live_strend"] != 0.0:
+                    strend_val = data["live_strend"]
+                    strend_trend = data["live_trend"]
+                else:
+                    strend_val = strend_data[-1].get("value", 0.0) if strend_data else 0.0
+                    strend_trend = strend_data[-1].get("trend", 0) if strend_data else 0
+                    
+                ema_data = data.get("ema", [])
+                if "live_ema" in data and data["live_ema"] != 0.0:
+                    ema_val = data["live_ema"]
+                else:
+                    ema_val = ema_data[-1].get("value", 0.0) if ema_data else 0.0
+                    
                 data_available = True
                 
-                # 2. Strategy Logic: Crossover (only if active)
+                # 2. Strategy Logic: Supertrend Crossover
                 if st.session_state.auto_trading_active:
                     current_phase = st.session_state.trading_phase
                     tsym = st.session_state.get('trade_tsym')
@@ -568,29 +615,29 @@ elif menu == "📦 Order Portal": # Order Portal
                     exch = st.session_state.get('trade_exch')
                     
                     if tsym and qty > 0 and exch:
-                        # STATE 1: WAIT FOR DIP (Price must go below ALMA first)
+                        # STATE 1: WAIT FOR DIP (Price must go into Downtrend first)
                         if current_phase == 'WAIT_FOR_DIP':
-                            if ltp < alma_val:
-                                st.session_state.trading_logs.append(f"[{datetime.now().strftime('%H:%M:%S')}] 📉 Price below ALMA ({ltp:.2f} < {alma_val:.2f}). Strategy ARMED for BUY.")
+                            if strend_trend == -1:
+                                st.session_state.trading_logs.append(f"[{datetime.now().strftime('%H:%M:%S')}] 📉 Supertrend is DOWN. Strategy ARMED for BUY.")
                                 st.session_state.trading_phase = 'BUY'
                                 st.rerun()
                         
-                        # STATE 2: BUY (Armed, waiting for cross above)
-                        elif current_phase == 'BUY' and ltp > alma_val:
+                        # STATE 2: BUY (Armed, waiting for Uptrend)
+                        elif current_phase == 'BUY' and strend_trend == 1:
                             res = place_flattrade_order(tsym, qty, exch, 'B')
                             if res.get('stat') == 'Ok':
-                                st.session_state.trading_logs.append(f"[{datetime.now().strftime('%H:%M:%S')}] ✅ AUTO BUY: {tsym} @ {ltp} (Price crossed above ALMA: {alma_val:.2f})")
+                                st.session_state.trading_logs.append(f"[{datetime.now().strftime('%H:%M:%S')}] ✅ AUTO BUY: {tsym} @ {ltp} (Supertrend flipped to UP)")
                                 st.session_state.trading_phase = 'SELL'
                                 st.session_state.last_order_side = f"BUY @ {ltp}"
                                 st.rerun()
                             else:
                                 st.session_state.trading_logs.append(f"[{datetime.now().strftime('%H:%M:%S')}] ❌ BUY FAILED: {res.get('emsg')}")
                         
-                        # STATE 3: SELL (Bought, waiting for cross below)
-                        elif current_phase == 'SELL' and ltp < alma_val:
+                        # STATE 3: SELL (Bought, waiting for Downtrend)
+                        elif current_phase == 'SELL' and strend_trend == -1:
                             res = place_flattrade_order(tsym, qty, exch, 'S')
                             if res.get('stat') == 'Ok':
-                                st.session_state.trading_logs.append(f"[{datetime.now().strftime('%H:%M:%S')}] ✅ AUTO SELL: {tsym} @ {ltp} (Price crossed below ALMA: {alma_val:.2f})")
+                                st.session_state.trading_logs.append(f"[{datetime.now().strftime('%H:%M:%S')}] ✅ AUTO SELL: {tsym} @ {ltp} (Supertrend flipped to DOWN)")
                                 st.session_state.trading_phase = 'WAIT_FOR_DIP' # RESET to wait for next cycle
                                 st.session_state.last_order_side = f"SELL @ {ltp}"
                                 st.rerun()
@@ -606,8 +653,9 @@ elif menu == "📦 Order Portal": # Order Portal
         with col_m1:
             st.subheader("Live Market Feed")
             if data_available:
-                st.metric("LTP", f"{ltp:.2f}", delta=f"{ltp-alma_val:.2f} (vs ALMA)")
-                st.write(f"**ALMA:** {alma_val:.2f}")
+                st.metric("LTP", f"{ltp:.2f}", delta=f"{ltp-strend_val:.2f} (vs Supertrend)")
+                st.write(f"**EMA (200):** {ema_val:.2f}")
+                st.write(f"**Supertrend:** {strend_val:.2f} ({'🟢 UP' if strend_trend == 1 else '🔴 DOWN'})")
             else:
                 st.info("Waiting for market data...")
         
@@ -675,7 +723,7 @@ elif menu == "📦 Order Portal": # Order Portal
                     st.session_state.auto_trading_active = True
                     st.session_state.trading_phase = 'WAIT_FOR_DIP' # INITIAL STATE
                     st.session_state.last_order_side = None
-                    st.session_state.trading_logs.append(f"[{datetime.now().strftime('%H:%M:%S')}] 🤖 Strategy Activated. Waiting for price to dip below ALMA...")
+                    st.session_state.trading_logs.append(f"[{datetime.now().strftime('%H:%M:%S')}] 🤖 Strategy Activated. Waiting for Supertrend to flip DOWN...")
                     st.rerun()
         else:
             if st.button("🛑 STOP AUTO TRADING", type="secondary", use_container_width=True):

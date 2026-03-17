@@ -21,8 +21,10 @@ default_token = "472789"
 exchange_type = int(sys.argv[1]) if len(sys.argv) > 1 else default_exchange
 token_id = sys.argv[2] if len(sys.argv) > 2 else default_token
 
-TICK_BAR_SIZE = 5
-ALMA_PERIOD = 200
+# 1R configuration: 1.0 means 1 point. Change to 0.05 if 1R means exactly 1 tick for Nifty.
+RANGE_BAR_SIZE = 1.0
+EMA_PERIOD = 200
+SUPERTREND_PERIOD = 10
 TOKEN_LIST = [{"exchangeType": exchange_type, "tokens": [token_id]}]
 CORRELATION_ID = f"backend_{token_id}"
 DATA_FILE = "market_data.json"
@@ -33,7 +35,8 @@ class MarketDataBackend:
     def __init__(self):
         self.lock = threading.Lock()
         self.ohlc_bars = []
-        self.alma_bars = []
+        self.ema_bars = []
+        self.supertrend_bars = []
         self.raw_bars = []
         self.current_bar = {"open": None, "high": -float("inf"), "low": float("inf"), "close": None, "ticks": 0, "volume": 0}
         self.latest_ltp = 0.0
@@ -89,7 +92,7 @@ class MarketDataBackend:
         logger.error(f"### [v2.0] WebSocket Error: {error} ###")
         logger.error(traceback.format_exc())
 
-    def on_close(self, wsapp, code, msg):
+    def on_close(self, wsapp, code=None, msg=None):
         logger.warn(f"### [v2.0] WebSocket Closed: {code} - {msg} ###")
 
     def add_tick(self, ltp, qty, ts):
@@ -97,13 +100,20 @@ class MarketDataBackend:
             self.latest_ltp = ltp
             if self.current_bar["open"] is None:
                 self.current_bar["open"] = ltp
+                self.current_bar["high"] = ltp
+                self.current_bar["low"] = ltp
+                self.current_bar["close"] = ltp
+                self.current_bar["ticks"] = 0
+                self.current_bar["volume"] = 0
+
             self.current_bar["high"] = max(self.current_bar["high"], ltp)
             self.current_bar["low"] = min(self.current_bar["low"], ltp)
             self.current_bar["close"] = ltp
             self.current_bar["ticks"] += 1
             self.current_bar["volume"] += qty
 
-            if self.current_bar["ticks"] >= TICK_BAR_SIZE:
+            # Range 1R condition
+            if (self.current_bar["high"] - self.current_bar["low"]) >= RANGE_BAR_SIZE:
                 # Use raw UTC timestamp for chart consistency
                 chart_time = int(ts.timestamp())
                 bar = {
@@ -117,37 +127,188 @@ class MarketDataBackend:
                 self.ohlc_bars.append(bar)
                 self.raw_bars.append(bar)
                 
-                # ALMA Logic (Arnaud Legoux Moving Average - 200 period)
-                if len(self.ohlc_bars) >= ALMA_PERIOD:
-                    closes = np.array([b["close"] for b in self.ohlc_bars[-ALMA_PERIOD:]])
-                    offset = 0.85
-                    sigma = 6.0
-                    m = offset * (ALMA_PERIOD - 1)
-                    s = ALMA_PERIOD / sigma
-                    weights = np.exp(-((np.arange(ALMA_PERIOD) - m)**2) / (2 * s**2))
-                    weights /= weights.sum()
-                    alma_val = float(np.dot(closes, weights))
-                    self.alma_bars.append({"time": chart_time, "value": alma_val})
-                else:
-                    # Initializing: use simple mean if < 200
-                    closes = [b["close"] for b in self.ohlc_bars]
-                    alma_val = sum(closes) / len(closes)
-                    self.alma_bars.append({"time": chart_time, "value": alma_val})
+                # EMA Logic (200 period)
+                if len(self.ohlc_bars) > 0:
+                    current_close = self.ohlc_bars[-1]["close"]
+                    if len(self.ema_bars) == 0:
+                        # Initialize EMA with the first close
+                        self.ema_bars.append({"time": chart_time, "value": current_close})
+                    else:
+                        prev_ema = self.ema_bars[-1]["value"]
+                        multiplier = 2 / (EMA_PERIOD + 1)
+                        ema_val = (current_close - prev_ema) * multiplier + prev_ema
+                        self.ema_bars.append({"time": chart_time, "value": ema_val})
 
-                if len(self.ohlc_bars) > 1000: # Increased limit for ALMA 200 support
+                # Supertrend Logic (10, EMA: EMA)
+                # First compute True Range and ATR (EMA of TR)
+                if len(self.ohlc_bars) > 0:
+                    current_high = self.ohlc_bars[-1]["high"]
+                    current_low = self.ohlc_bars[-1]["low"]
+                    current_close = self.ohlc_bars[-1]["close"]
+                    
+                    # True Range
+                    if len(self.ohlc_bars) == 1:
+                        tr = current_high - current_low
+                    else:
+                        prev_close = self.ohlc_bars[-2]["close"]
+                        tr = max(current_high - current_low, abs(current_high - prev_close), abs(current_low - prev_close))
+                    
+                    # Store TR temporarily to compute ATR (EMA of TR)
+                    if not hasattr(self, 'tr_list'):
+                        self.tr_list = []
+                    self.tr_list.append(tr)
+                    
+                    # ATR (EMA of TR)
+                    if not hasattr(self, 'atr_list'):
+                        self.atr_list = []
+                    
+                    if len(self.atr_list) == 0:
+                        self.atr_list.append(tr)
+                    else:
+                        prev_atr = self.atr_list[-1]
+                        atr_multiplier = 2 / (SUPERTREND_PERIOD + 1)
+                        current_atr = (tr - prev_atr) * atr_multiplier + prev_atr
+                        self.atr_list.append(current_atr)
+                        
+                    # Calculate basic upper and lower bands based on EMA instead of (High+Low)/2
+                    if len(self.ema_bars) > 0:
+                        basis = self.ema_bars[-1]["value"]
+                        current_atr_val = self.atr_list[-1]
+                        
+                        # Note: The image says "ATR Factor 0" or (10, EMA: EMA, 0)
+                        # If multiplier is 0, the upper and lower bands are just the EMA.
+                        # Wait, TradingView Supertrend needs a multiplier. Let's use standard ATR multiplier (e.g., 3) if 0 is a placeholder,
+                        # or if it strictly means 0, the Bands equal the EMA. We'll use a configurable multiplier.
+                        # Using 3 as standard default if 0 implies no dynamic multiplier but a default.
+                        # Using 0.0 as requested
+                        ST_MULTIPLIER = 0.0 
+                        
+                        basic_upperband = basis + (ST_MULTIPLIER * current_atr_val)
+                        basic_lowerband = basis - (ST_MULTIPLIER * current_atr_val)
+                        
+                        if not hasattr(self, 'final_upperband_list'):
+                            self.final_upperband_list = []
+                            self.final_lowerband_list = []
+                            self.st_trend_list = [] # 1 for uptrend, -1 for downtrend
+                        
+                        if len(self.final_upperband_list) == 0:
+                            self.final_upperband_list.append(basic_upperband)
+                            self.final_lowerband_list.append(basic_lowerband)
+                            self.st_trend_list.append(1)
+                            self.supertrend_bars.append({"time": chart_time, "value": basic_lowerband, "trend": 1})
+                        else:
+                            prev_final_upperband = self.final_upperband_list[-1]
+                            prev_final_lowerband = self.final_lowerband_list[-1]
+                            # Use EMA instead of close for crossovers (source of supertrend = ema)
+                            prev_source = self.ema_bars[-2]["value"] if len(self.ema_bars) > 1 else basis
+                            current_source = basis
+                            prev_trend = self.st_trend_list[-1]
+                            
+                            # Final Upper Band
+                            if basic_upperband < prev_final_upperband or prev_source > prev_final_upperband:
+                                final_upperband = basic_upperband
+                            else:
+                                final_upperband = prev_final_upperband
+                                
+                            # Final Lower Band
+                            if basic_lowerband > prev_final_lowerband or prev_source < prev_final_lowerband:
+                                final_lowerband = basic_lowerband
+                            else:
+                                final_lowerband = prev_final_lowerband
+                                
+                            # Trend Crossover using EMA (current_source) instead of close
+                            if prev_trend == 1 and current_source < final_lowerband:
+                                trend = -1
+                            elif prev_trend == -1 and current_source > final_upperband:
+                                trend = 1
+                            else:
+                                trend = prev_trend
+                                
+                            self.final_upperband_list.append(final_upperband)
+                            self.final_lowerband_list.append(final_lowerband)
+                            self.st_trend_list.append(trend)
+                            
+                            st_value = final_lowerband if trend == 1 else final_upperband
+                            self.supertrend_bars.append({"time": chart_time, "value": st_value, "trend": trend})
+
+                if len(self.ohlc_bars) > 1000:
                     self.ohlc_bars.pop(0)
-                    if self.alma_bars: self.alma_bars.pop(0)
+                    if self.ema_bars: self.ema_bars.pop(0)
+                    if self.supertrend_bars: self.supertrend_bars.pop(0)
+                    if hasattr(self, 'tr_list') and len(self.tr_list) > 1000: self.tr_list.pop(0)
+                    if hasattr(self, 'atr_list') and len(self.atr_list) > 1000: self.atr_list.pop(0)
+                    if hasattr(self, 'final_upperband_list') and len(self.final_upperband_list) > 1000:
+                        self.final_upperband_list.pop(0)
+                        self.final_lowerband_list.pop(0)
+                        self.st_trend_list.pop(0)
                 
                 self.current_bar = {"open": None, "high": -float("inf"), "low": float("inf"), "close": None, "ticks": 0, "volume": 0}
                 self.save_data()
 
     def save_data(self):
         try:
+            # LIVE UNCLOSED INDICATOR CALCULATIONS
+            live_ema = 0.0
+            live_strend = 0.0
+            live_trend = 1
+            current_close = float(self.latest_ltp)
+            
+            if current_close > 0:
+                # Live EMA
+                if len(self.ema_bars) > 0:
+                    prev_ema = self.ema_bars[-1]["value"]
+                    multiplier = 2 / (EMA_PERIOD + 1)
+                    live_ema = (current_close - prev_ema) * multiplier + prev_ema
+                else:
+                    live_ema = current_close
+                    
+                # Live Supertrend
+                if len(self.ohlc_bars) > 0 and hasattr(self, 'atr_list') and len(self.atr_list) > 0:
+                    current_high = max(self.current_bar["high"], current_close) if self.current_bar["high"] != -float("inf") else current_close
+                    current_low = min(self.current_bar["low"], current_close) if self.current_bar["low"] != float("inf") else current_close
+                    prev_close = self.ohlc_bars[-1]["close"]
+                    
+                    tr = max(current_high - current_low, abs(current_high - prev_close), abs(current_low - prev_close))
+                    prev_atr = self.atr_list[-1]
+                    atr_multiplier = 2 / (SUPERTREND_PERIOD + 1)
+                    live_atr = (tr - prev_atr) * atr_multiplier + prev_atr
+                    
+                    basic_upperband = live_ema + (0.0 * live_atr)
+                    basic_lowerband = live_ema - (0.0 * live_atr)
+                    
+                    if hasattr(self, 'final_upperband_list') and len(self.final_upperband_list) > 0:
+                        prev_final_upperband = self.final_upperband_list[-1]
+                        prev_final_lowerband = self.final_lowerband_list[-1]
+                        prev_trend = self.st_trend_list[-1]
+                        
+                        # Use EMA instead of close for live crossovers
+                        prev_source = self.ema_bars[-1]["value"] if len(self.ema_bars) > 0 else prev_close
+                        current_source = live_ema
+                        
+                        live_final_upperband = basic_upperband if (basic_upperband < prev_final_upperband or prev_source > prev_final_upperband) else prev_final_upperband
+                        live_final_lowerband = basic_lowerband if (basic_lowerband > prev_final_lowerband or prev_source < prev_final_lowerband) else prev_final_lowerband
+                        
+                        # Live Trend Crossover using Live EMA
+                        if prev_trend == 1 and current_source < live_final_lowerband:
+                            live_trend = -1
+                        elif prev_trend == -1 and current_source > live_final_upperband:
+                            live_trend = 1
+                        else:
+                            live_trend = prev_trend
+                            
+                        live_strend = live_final_lowerband if live_trend == 1 else live_final_upperband
+                else:
+                    live_strend = current_close
+
             data = {
-                "ltp": float(self.latest_ltp),
+                "ltp": current_close,
                 "ohlc": self.ohlc_bars,
-                "alma": self.alma_bars,
-                "version": "4.0",
+                "ema": self.ema_bars,
+                "supertrend": self.supertrend_bars,
+                "live_ema": live_ema,
+                "live_strend": live_strend,
+                "live_trend": live_trend,
+                "version": "4.1",
                 "last_update": time.time(),
                 "token_id": str(token_id),
                 "exchange_type": int(exchange_type)
