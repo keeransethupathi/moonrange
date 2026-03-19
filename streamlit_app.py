@@ -254,7 +254,7 @@ if 'selected_instrument' not in st.session_state:
 if 'selected_strike' not in st.session_state:
     st.session_state.selected_strike = None
 if 'dashboard_token' not in st.session_state:
-    st.session_state.dashboard_token = "472789"
+    st.session_state.dashboard_token = "486503"
 if 'dashboard_exchange' not in st.session_state:
     st.session_state.dashboard_exchange = "MCX"
 if 'trade_tsym_input' not in st.session_state:

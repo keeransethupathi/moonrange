@@ -15,7 +15,7 @@ import sys
 # ================= CONFIG v2.3 =================
 # Default values
 default_exchange = 5
-default_token = "472789"
+default_token = "486503"
 
 # Load from arguments if provided
 exchange_type = int(sys.argv[1]) if len(sys.argv) > 1 else default_exchange
