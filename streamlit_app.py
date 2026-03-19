@@ -261,6 +261,8 @@ if 'trade_tsym_input' not in st.session_state:
     st.session_state.trade_tsym_input = "NIFTY24FEB26C26000"
 if 'trade_exch_input' not in st.session_state:
     st.session_state.trade_exch_input = "NFO"
+if 'dashboard_range' not in st.session_state:
+    st.session_state.dashboard_range = 0.05
 
 # Automation Strategy State
 if 'trading_phase' not in st.session_state:
@@ -297,6 +299,9 @@ if menu == "📊 Dashboard":
         token_id = st.text_input("Token ID", value=st.session_state.dashboard_token, key="dash_token")
         st.session_state.dashboard_token = token_id
         
+        range_val = st.number_input("Range 1R Size", value=float(st.session_state.get('dashboard_range', 0.05)), step=0.05, format="%.2f", key="dash_range")
+        st.session_state.dashboard_range = range_val
+        
         st.divider()
         
         if not st.session_state.backend_running:
@@ -332,11 +337,11 @@ if menu == "📊 Dashboard":
                         else:
                             import subprocess
                             python_exe = sys.executable
-                            cmd = [python_exe, "backend.py", str(exchange_type), str(token_id)]
+                            cmd = [python_exe, "backend.py", str(exchange_type), str(token_id), str(range_val)]
                             
                             # Launch backend.py as a separate process in a new console
                             subprocess.Popen(cmd, creationflags=subprocess.CREATE_NEW_CONSOLE if os.name == 'nt' else 0)
-                            st.success(f"System Launching for {selected_exchange_name}:{token_id}...")
+                            st.success(f"System Launching for {selected_exchange_name}:{token_id} with Range {range_val}...")
                         
                         st.session_state.backend_running = True
                         time.sleep(2)

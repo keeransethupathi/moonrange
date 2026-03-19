@@ -20,9 +20,10 @@ default_token = "472789"
 # Load from arguments if provided
 exchange_type = int(sys.argv[1]) if len(sys.argv) > 1 else default_exchange
 token_id = sys.argv[2] if len(sys.argv) > 2 else default_token
+range_bar_size_arg = float(sys.argv[3]) if len(sys.argv) > 3 else 0.05
 
 # 1R configuration: 1.0 means 1 point. Change to 0.05 if 1R means exactly 1 tick for Nifty.
-RANGE_BAR_SIZE = 1.0
+RANGE_BAR_SIZE = range_bar_size_arg
 EMA_PERIOD = 200
 SUPERTREND_PERIOD = 10
 TOKEN_LIST = [{"exchangeType": exchange_type, "tokens": [token_id]}]
