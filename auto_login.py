@@ -1,16 +1,16 @@
+from selenium import webdriver
+from selenium.webdriver.common.keys import Keys
+from selenium.webdriver.common.action_chains import ActionChains
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+import undetected_chromedriver as uc
+import requests
+import hashlib
 import time
 import json
 import pyotp
 import os
-from selenium import webdriver
-from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from webdriver_manager.chrome import ChromeDriverManager
-import requests
-import hashlib
 
 def auto_login(creds=None, headless=False, log_func=None):
     def log(msg):
@@ -48,18 +48,28 @@ def auto_login(creds=None, headless=False, log_func=None):
     token = totp.now()
     log(f"Generated TOTP: {token}")
 
-    # Setup Selenium
-    chrome_options = Options()
+    # Setup Selenium via undetected_chromedriver
+    chrome_options = uc.ChromeOptions()
+    
+    # Create a persistent user data directory to store cookies/session and look more "human"
+    user_data_dir = os.path.join(os.getcwd(), 'chrome_profile')
+    if not os.path.exists(user_data_dir):
+        os.makedirs(user_data_dir)
+    chrome_options.add_argument(f"--user-data-dir={user_data_dir}")
+    
+    # Bypassing CORS and Site Isolation (Nuclear Option)
+    chrome_options.add_argument("--disable-web-security")
+    chrome_options.add_argument("--disable-site-isolation-trials")
+    
     if headless:
-        chrome_options.add_argument("--headless=new") # Use the latest headless mode
+        chrome_options.add_argument("--headless")
         chrome_options.add_argument("--window-size=1920,1080")
-        chrome_options.add_argument("--disable-gpu")
         chrome_options.add_argument("--no-sandbox")
         chrome_options.add_argument("--disable-dev-shm-usage")
-        # Anti-bot detection
-        chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36")
-        chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
-        chrome_options.add_experimental_option('useAutomationExtension', False)
+    
+    # Aggressive stealth arguments
+    chrome_options.add_argument("--disable-blink-features=AutomationControlled")
+    chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36")
         
     driver = None
     try:
@@ -67,22 +77,11 @@ def auto_login(creds=None, headless=False, log_func=None):
         auth_url = f"https://auth.flattrade.in/?app_key={creds['api_key']}"
         
         try:
-            # Try standard execution first
-            driver = webdriver.Chrome(options=chrome_options)
+            # Use undetected_chromedriver
+            driver = uc.Chrome(options=chrome_options, use_subprocess=True)
         except Exception as e:
-            # Fallback for Streamlit Cloud (Linux) or missing manager
-            try:
-                from selenium.webdriver.chrome.service import Service
-                from webdriver_manager.chrome import ChromeDriverManager
-                driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=chrome_options)
-            except Exception as e2:
-                try:
-                    # Linux/Streamlit environment specific fallback
-                    chrome_options.binary_location = "/usr/bin/chromium"
-                    driver = webdriver.Chrome(service=Service("/usr/bin/chromedriver"), options=chrome_options)
-                except Exception as e3:
-                    log(f"All ChromeDriver attempts failed: {e3}")
-                    return {"status": "error", "message": f"Selenium setup failed: {e3}"}
+            log(f"Undetected ChromeDriver setup failed: {e}")
+            return {"status": "error", "message": f"Selenium uc setup failed: {e}"}
 
         # Disable webdriver flag via script
         driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
@@ -103,30 +102,27 @@ def auto_login(creds=None, headless=False, log_func=None):
                         wait.until(EC.element_to_be_clickable((By.XPATH, xpath)))
                         
                         # Human-like interaction: Click -> Clear -> Type Char-by-char -> Blur
-                        driver.execute_script("arguments[0].click();", element)
-                        time.sleep(0.2)
+                        element.click()
+                        time.sleep(0.5)
                         element.clear()
                         
                         for char in value:
                             element.send_keys(char)
-                            time.sleep(0.05) if headless else time.sleep(0.02)
+                            time.sleep(0.1) # Human-like typing speed
                         
                         # Force update via JavaScript and events (Crucial for Vue/React)
-                        js_script = """
-                        var element = arguments[0];
-                        var val = arguments[1];
-                        element.value = val;
-                        // Dispatch multiple events to ensure framework detection
-                        element.dispatchEvent(new Event('input', { bubbles: true }));
-                        element.dispatchEvent(new Event('change', { bubbles: true }));
-                        element.dispatchEvent(new Event('blur', { bubbles: true }));
-                        """
-                        driver.execute_script(js_script, element, value)
+                        driver.execute_script("""
+                            var el = arguments[0];
+                            el.dispatchEvent(new Event('input', { bubbles: true }));
+                            el.dispatchEvent(new Event('change', { bubbles: true }));
+                            el.dispatchEvent(new Event('blur', { bubbles: true }));
+                        """, element)
                         
                         # Verify the value stuck
                         current_val = element.get_attribute('value')
                         if current_val == value:
                             log(f"Entered and verified {label} using {xpath}")
+                            time.sleep(1) # Wait for framework to process input
                             return True
                         else:
                             log(f"Value verification failed for {label}: expected {value}, got {current_val}")
@@ -148,51 +144,79 @@ def auto_login(creds=None, headless=False, log_func=None):
         if not send_keys_resilient(pass_xpaths, creds['password'], "password"):
             return {"status": "error", "message": "Failed to find password input"}
 
+        # Generate TOTP JUST-IN-TIME
+        totp = pyotp.TOTP(creds['totp_key'])
+        token = totp.now()
+        log(f"Generated fresh TOTP: {token}")
+
         # Fill TOTP
         totp_xpaths = ["//input[@placeholder='OTP / TOTP']", "//input[@placeholder='TOTP']", "//input[@name='otp']"]
         if not send_keys_resilient(totp_xpaths, token, "TOTP"):
             return {"status": "error", "message": "Failed to find TOTP input"}
-
-        # Click Login
-        log("Clicking login button...")
-        time.sleep(1)
         
+        # Try ENTER key first
         try:
-            # Use JavaScript for a robust click
-            script = """
-            var buttons = document.querySelectorAll('button');
-            for (var i = 0; i < buttons.length; i++) {
-                var text = buttons[i].textContent.toLowerCase();
-                if (text.includes('log in') || text.includes('submit') || text.includes('authorize')) {
-                    buttons[i].click();
-                    return true;
+            totp_input = driver.switch_to.active_element
+            totp_input.send_keys(Keys.ENTER)
+            log("Submitted via ENTER key on TOTP field")
+        except:
+            pass
+
+        time.sleep(1) 
+
+
+        try:
+            # Multi-layer Click Strategy
+            clicked = False
+            
+            # Find the button first to check its state
+            try:
+                login_btn = driver.find_element(By.XPATH, "//button[.//span[contains(text(), 'Log In')]] | //button[contains(., 'Log In')]")
+                log(f"Login button found. Enabled: {login_btn.is_enabled()}")
+                
+                # 1. Primary approach: Native ActionChains Double-Click
+                driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", login_btn)
+                time.sleep(0.5)
+                ActionChains(driver).move_to_element(login_btn).pause(0.2).click().pause(0.1).click().perform()
+                log("Clicked login button via ActionChains (Rapid-fire Double)")
+                clicked = True
+            except Exception as e:
+                log(f"ActionChains click failed: {e}")
+                
+            if not clicked:
+                # 2. Try JavaScript with PointerEvents and Force Submit
+                script = """
+                var buttons = document.querySelectorAll('button');
+                for (var i = 0; i < buttons.length; i++) {
+                    var text = buttons[i].textContent.toLowerCase();
+                    if (text.includes('log in') || text.includes('submit')) {
+                        var btn = buttons[i];
+                        btn.disabled = false;
+                        btn.classList.remove('v-btn--disabled');
+                        
+                        // Human-like events
+                        btn.dispatchEvent(new PointerEvent('pointerover', {bubbles: true}));
+                        btn.dispatchEvent(new PointerEvent('pointerdown', {bubbles: true}));
+                        btn.dispatchEvent(new PointerEvent('pointerup', {bubbles: true}));
+                        btn.click();
+                        
+                        // Immediate form submission if still on page
+                        var form = btn.closest('form');
+                        if (form) {
+                            if (typeof form.requestSubmit === 'function') {
+                                form.requestSubmit();
+                            } else {
+                                form.submit();
+                            }
+                        }
+                        return true;
+                    }
                 }
-            }
-            return false;
-            """
-            for attempt in range(3):
+                return false;
+                """
                 clicked = driver.execute_script(script)
                 if clicked:
-                    log(f"Clicked login button via JS (attempt {attempt+1})")
-                    break
-                else:
-                    # Fallback to standard wait if JS fails 
-                    try:
-                        login_btn = driver.find_element(By.XPATH, "//button[contains(translate(., 'LOGIN', 'login'), 'login')]")
-                        driver.execute_script("arguments[0].click();", login_btn)
-                        log("Clicked login button via backup XPath")
-                        break
-                    except:
-                        # Third fallback: Press Enter on the last input
-                        try:
-                            last_input = driver.switch_to.active_element
-                            if last_input:
-                                last_input.send_keys(Keys.ENTER)
-                                log("Submitted form via Enter key")
-                                break
-                        except:
-                            pass
-                time.sleep(1)
+                    log("Clicked login button via JS (PointerEvents + Submit Fallback)")
         except Exception as e:
             log(f"Login click failed: {e}")
 

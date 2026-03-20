@@ -117,6 +117,11 @@ class MarketDataBackend:
             if (self.current_bar["high"] - self.current_bar["low"]) >= RANGE_BAR_SIZE:
                 # Use raw UTC timestamp for chart consistency
                 chart_time = int(ts.timestamp())
+                
+                # Lightweight Charts requires strictly increasing unique timestamps
+                if len(self.ohlc_bars) > 0 and chart_time <= self.ohlc_bars[-1]["time"]:
+                    chart_time = self.ohlc_bars[-1]["time"] + 1
+                
                 bar = {
                     "time": chart_time,
                     "open": self.current_bar["open"],
