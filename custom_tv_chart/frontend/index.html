@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <script src="https://unpkg.com/lightweight-charts@3.8.0/dist/lightweight-charts.standalone.production.js"></script>
+    <style>
+        body { margin: 0; padding: 0; background-color: transparent; overflow: hidden; }
+        #chart { width: 100vw; height: 100vh; }
+        #error-log { position: absolute; top: 0; left: 0; z-index: 9999; color: #ff5555; font-family: monospace; white-space: pre-wrap; pointer-events: none; }
+    </style>
+</head>
+<body>
+    <div id="error-log"></div>
+    <div id="chart"></div>
+    <script>
+        let chart = null;
+        let createdSeries = {};
+
+        function logError(msg) {
+            document.getElementById('error-log').innerText += msg + "\n";
+        }
+
+        function sendHeight(height) {
+            window.parent.postMessage({
+                isStreamlitMessage: true,
+                type: "streamlit:setFrameHeight",
+                height: height
+            }, "*");
+        }
+
+        window.addEventListener("message", function(event) {
+            try {
+                if (event.data.type !== "streamlit:render") return;
+                
+                const args = event.data.args;
+                if (!args || !args.chartOptionsArgs) {
+                    logError("Missing chartOptionsArgs");
+                    return;
+                }
+                
+                const chartOptionsItem = args.chartOptionsArgs[0];
+                const chartOptions = chartOptionsItem.chart || {};
+                const seriesData = chartOptionsItem.series || [];
+
+                if (!chart) {
+                    // Set explicit width because lightweight-charts might fail on 0px width empty containers
+                    chartOptions.width = window.innerWidth;
+                    chartOptions.height = chartOptions.height || 500;
+                    
+                    chart = LightweightCharts.createChart(document.getElementById('chart'), chartOptions);
+                    sendHeight(chartOptions.height);
+
+                    // Handle resize
+                    window.addEventListener('resize', () => {
+                        chart.resize(window.innerWidth, chartOptions.height);
+                    });
+
+                    // Add series
+                    seriesData.forEach((s, idx) => {
+                        let newSeries;
+                        if (s.type === 'Candlestick') newSeries = chart.addCandlestickSeries(s.options);
+                        else if (s.type === 'Line') newSeries = chart.addLineSeries(s.options);
+                        else if (s.type === 'Area') newSeries = chart.addAreaSeries(s.options);
+                        else if (s.type === 'Histogram') newSeries = chart.addHistogramSeries(s.options);
+                        
+                        if (newSeries) {
+                            newSeries.setData(s.data);
+                            createdSeries[idx] = newSeries;
+                        }
+                    });
+                    
+                    // Apply timeScale options after initializing
+                    if (chartOptions.timeScale) {
+                        chart.timeScale().applyOptions(chartOptions.timeScale);
+                    }
+                    
+                    // Fit all loaded data into the frame initially!
+                    chart.timeScale().fitContent();
+                } else {
+                    // Update exact matches
+                    seriesData.forEach((s, idx) => {
+                        if (createdSeries[idx]) {
+                            createdSeries[idx].setData(s.data);
+                        }
+                    });
+                }
+            } catch (err) {
+                logError(err.message + "\n" + err.stack);
+            }
+        });
+
+        // Initialize handshake
+        window.parent.postMessage({
+            isStreamlitMessage: true,
+            type: "streamlit:componentReady",
+            apiVersion: 1
+        }, "*");
+    </script>
+</body>
+</html>

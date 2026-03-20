@@ -9,8 +9,7 @@ from SmartApi.smartWebSocketV2 import SmartWebSocketV2
 from logzero import logger
 import traceback
 import sys
-
-import sys
+import sqlite3
 
 # ================= CONFIG v2.3 =================
 # Default values
@@ -42,6 +41,20 @@ class MarketDataBackend:
         self.current_bar = {"open": None, "high": -float("inf"), "low": float("inf"), "close": None, "ticks": 0, "volume": 0}
         self.latest_ltp = 0.0
         self.sws = None
+        
+        # Database initialization for persistent saving
+        try:
+            self.db_conn = sqlite3.connect("market_data.db", check_same_thread=False)
+            self.db_cursor = self.db_conn.cursor()
+            self.db_cursor.execute('''CREATE TABLE IF NOT EXISTS ohlc (
+                                time INTEGER,
+                                open REAL, high REAL, low REAL, close REAL, volume INTEGER,
+                                token_id TEXT,
+                                UNIQUE(time, token_id)
+                            )''')
+            self.db_conn.commit()
+        except Exception as e:
+            logger.error(f"DB init error: {e}")
 
     def on_open(self, wsapp):
         logger.info("### [v2.0] WebSocket Connected Successfully ###")
@@ -132,6 +145,14 @@ class MarketDataBackend:
                 }
                 self.ohlc_bars.append(bar)
                 self.raw_bars.append(bar)
+                
+                # Save to automatic database file
+                try:
+                    self.db_cursor.execute("INSERT OR IGNORE INTO ohlc (time, open, high, low, close, volume, token_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                        (chart_time, bar["open"], bar["high"], bar["low"], bar["close"], bar["volume"], str(token_id)))
+                    self.db_conn.commit()
+                except Exception as e:
+                    logger.error(f"DB save error: {e}")
                 
                 # EMA Logic (200 period)
                 if len(self.ohlc_bars) > 0:

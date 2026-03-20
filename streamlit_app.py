@@ -14,7 +14,7 @@ import logging
 import re
 from datetime import datetime
 from SmartApi.smartWebSocketV2 import SmartWebSocketV2
-from streamlit_lightweight_charts import renderLightweightCharts
+from custom_tv_chart import renderCustomLightweightCharts
 from order import place_flattrade_order
 
 # ================= STREAMLIT CONFIG =================
@@ -187,7 +187,25 @@ def display_dashboard_fragment(token_id, exchange_type, exchange_mapping):
             series.append({"type": 'Line', "data": strend, "options": {"lineWidth": 2, "title": 'Supertrend'}})
         
         # Rendering directly in the fragment (without .empty()) reduces flicker
-        renderLightweightCharts([{"chart": chart_options, "series": series}], 'integrated_chart')
+        renderCustomLightweightCharts([{"chart": chart_options, "series": series}], 'integrated_chart')
+        
+        st.divider()
+        col1, _ = st.columns([1, 3])
+        with col1:
+            csv_df = pd.DataFrame(ohlc)
+            if not csv_df.empty:
+                # Revert IST offset applied earlier (+19800) for downloading clean UTC data
+                IST_OFFSET = 19800
+                csv_df['time'] = pd.to_datetime(csv_df['time'] - IST_OFFSET, unit='s')
+                csv_df['time'] = csv_df['time'].dt.tz_localize('UTC').dt.tz_convert('Asia/Kolkata')
+                csv = csv_df.to_csv(index=False).encode('utf-8')
+                st.download_button(
+                    label="📥 Download Chart Data (CSV)",
+                    data=csv,
+                    file_name=f"market_data_{token_id}.csv",
+                    mime="text/csv",
+                    use_container_width=True
+                )
     else:
         st.info("Connected. Waiting for the first Range 1R bar...")
             
