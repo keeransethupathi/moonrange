@@ -11,3 +11,4 @@ selenium
 webdriver-manager
 psutil
 undetected-chromedriver
+setuptools
