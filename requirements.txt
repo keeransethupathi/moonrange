@@ -10,3 +10,4 @@ logzero
 selenium
 webdriver-manager
 psutil
+undetected-chromedriver
