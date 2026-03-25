@@ -13,7 +13,7 @@ import sqlite3
 
 # ================= CONFIG v2.3 =================
 # Default values
-default_exchange = 6
+default_exchange = 4
 default_token = "864149"
 
 # Load from arguments if provided

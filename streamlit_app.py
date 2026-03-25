@@ -306,7 +306,7 @@ if menu == "📊 Dashboard":
         st.header("Systems Control")
         
         # Selection UI
-        exchange_mapping = {"NSE": 1, "NFO": 2, "MCX": 5, "BSE": 3, "CDS": 4, "BFO": 6}
+        exchange_mapping = {"NSE": 1, "NFO": 2, "MCX": 5, "BSE": 3, "CDS": 13, "BFO": 4}
         exch_list = list(exchange_mapping.keys())
         default_idx = exch_list.index(st.session_state.dashboard_exchange) if st.session_state.dashboard_exchange in exch_list else 2
         
@@ -711,7 +711,7 @@ elif menu == "📦 Order Portal": # Order Portal
         st.write(f"**Total Quantity:** {total_qty}")
         st.session_state.trade_qty = total_qty
         
-        exch_map = {"NSE": 1, "NFO": 2, "MCX": 5, "BSE": 3, "CDS": 4, "BFO": 6}
+        exch_map = {"NSE": 1, "NFO": 2, "MCX": 5, "BSE": 3, "CDS": 13, "BFO": 4}
         trade_exch = st.selectbox("Exchange (exch)", options=list(exch_map.keys()), index=1, key="trade_exch_input_p")
         st.session_state.trade_exch = trade_exch
         
