@@ -714,7 +714,16 @@ elif menu == "📦 Order Portal": # Order Portal
         st.session_state.trade_qty = total_qty
         
         exch_map = {"NSE": 1, "NFO": 2, "MCX": 5, "BSE": 3, "CDS": 13, "BFO": 4}
-        trade_exch = st.selectbox("Exchange (exch)", options=list(exch_map.keys()), index=1, key="trade_exch_input_p")
+        exch_keys = list(exch_map.keys())
+        
+        # Determine Default Exchange based on tsym
+        default_exch_idx = 1 # Default NFO
+        if "SENSEX" in trade_tsym.upper() or "BANKEX" in trade_tsym.upper():
+            default_exch_idx = exch_keys.index("BFO")
+        elif "NIFTY" in trade_tsym.upper():
+            default_exch_idx = exch_keys.index("NFO")
+            
+        trade_exch = st.selectbox("Exchange (exch)", options=exch_keys, index=default_exch_idx, key="trade_exch_input_p")
         st.session_state.trade_exch = trade_exch
         
         st.divider()
