@@ -630,7 +630,7 @@ elif menu == "📦 Order Portal": # Order Portal
                     
                 data_available = True
                 
-                # 2. Strategy Logic: Supertrend Crossover
+                # 2. Strategy Logic: EMA Crossover
                 if st.session_state.auto_trading_active:
                     current_phase = st.session_state.trading_phase
                     tsym = st.session_state.get('trade_tsym')
@@ -638,18 +638,20 @@ elif menu == "📦 Order Portal": # Order Portal
                     exch = st.session_state.get('trade_exch')
                     
                     if tsym and qty > 0 and exch:
+                        current_trend = 1 if ltp > ema_val else -1
+
                         # STATE 1: WAIT FOR DIP (Price must go into Downtrend first)
                         if current_phase == 'WAIT_FOR_DIP':
-                            if strend_trend == -1:
-                                st.session_state.trading_logs.append(f"[{datetime.now().strftime('%H:%M:%S')}] 📉 Supertrend is DOWN. Strategy ARMED for BUY.")
+                            if current_trend == -1:
+                                st.session_state.trading_logs.append(f"[{datetime.now().strftime('%H:%M:%S')}] 📉 Price below EMA. Strategy ARMED for BUY.")
                                 st.session_state.trading_phase = 'BUY'
                                 st.rerun()
                         
                         # STATE 2: BUY (Armed, waiting for Uptrend)
-                        elif current_phase == 'BUY' and strend_trend == 1:
+                        elif current_phase == 'BUY' and current_trend == 1:
                             res = place_flattrade_order(tsym, qty, exch, 'B')
                             if res.get('stat') == 'Ok':
-                                st.session_state.trading_logs.append(f"[{datetime.now().strftime('%H:%M:%S')}] ✅ AUTO BUY: {tsym} @ {ltp} (Supertrend flipped to UP)")
+                                st.session_state.trading_logs.append(f"[{datetime.now().strftime('%H:%M:%S')}] ✅ AUTO BUY: {tsym} @ {ltp} (Crossed above EMA)")
                                 st.session_state.trading_phase = 'SELL'
                                 st.session_state.last_order_side = f"BUY @ {ltp}"
                                 st.rerun()
@@ -657,10 +659,10 @@ elif menu == "📦 Order Portal": # Order Portal
                                 st.session_state.trading_logs.append(f"[{datetime.now().strftime('%H:%M:%S')}] ❌ BUY FAILED: {res.get('emsg')}")
                         
                         # STATE 3: SELL (Bought, waiting for Downtrend)
-                        elif current_phase == 'SELL' and strend_trend == -1:
+                        elif current_phase == 'SELL' and current_trend == -1:
                             res = place_flattrade_order(tsym, qty, exch, 'S')
                             if res.get('stat') == 'Ok':
-                                st.session_state.trading_logs.append(f"[{datetime.now().strftime('%H:%M:%S')}] ✅ AUTO SELL: {tsym} @ {ltp} (Supertrend flipped to DOWN)")
+                                st.session_state.trading_logs.append(f"[{datetime.now().strftime('%H:%M:%S')}] ✅ AUTO SELL: {tsym} @ {ltp} (Crossed below EMA)")
                                 st.session_state.trading_phase = 'WAIT_FOR_DIP' # RESET to wait for next cycle
                                 st.session_state.last_order_side = f"SELL @ {ltp}"
                                 st.rerun()
@@ -746,7 +748,7 @@ elif menu == "📦 Order Portal": # Order Portal
                     st.session_state.auto_trading_active = True
                     st.session_state.trading_phase = 'WAIT_FOR_DIP' # INITIAL STATE
                     st.session_state.last_order_side = None
-                    st.session_state.trading_logs.append(f"[{datetime.now().strftime('%H:%M:%S')}] 🤖 Strategy Activated. Waiting for Supertrend to flip DOWN...")
+                    st.session_state.trading_logs.append(f"[{datetime.now().strftime('%H:%M:%S')}] 🤖 Strategy Activated. Waiting for Price to drop below EMA...")
                     st.rerun()
         else:
             if st.button("🛑 STOP AUTO TRADING", type="secondary", use_container_width=True):
