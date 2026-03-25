@@ -272,9 +272,9 @@ if 'selected_instrument' not in st.session_state:
 if 'selected_strike' not in st.session_state:
     st.session_state.selected_strike = None
 if 'dashboard_token' not in st.session_state:
-    st.session_state.dashboard_token = "486503"
+    st.session_state.dashboard_token = "864149"
 if 'dashboard_exchange' not in st.session_state:
-    st.session_state.dashboard_exchange = "MCX"
+    st.session_state.dashboard_exchange = "BFO"
 if 'trade_tsym_input' not in st.session_state:
     st.session_state.trade_tsym_input = "NIFTY24FEB26C26000"
 if 'trade_exch_input' not in st.session_state:
