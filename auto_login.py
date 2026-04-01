@@ -77,11 +77,37 @@ def auto_login(creds=None, headless=False, log_func=None):
         auth_url = f"https://auth.flattrade.in/?app_key={creds['api_key']}"
         
         try:
-            # Use undetected_chromedriver
-            driver = uc.Chrome(options=chrome_options, use_subprocess=True)
+            # Try undetected_chromedriver first (works best for local/Windows)
+            # If we are on Streamlit Cloud (Linux), specify the chromium binary explicitly
+            if os.path.exists('/usr/bin/chromium'):
+                log("Detected Streamlit Cloud environment. Forcing Chromium path for UC.")
+                chrome_options.binary_location = '/usr/bin/chromium'
+                driver = uc.Chrome(options=chrome_options, browser_executable_path='/usr/bin/chromium', use_subprocess=True)
+            else:
+                driver = uc.Chrome(options=chrome_options, use_subprocess=True)
         except Exception as e:
             log(f"Undetected ChromeDriver setup failed: {e}")
-            return {"status": "error", "message": f"Selenium uc setup failed: {e}"}
+            log("Attempting fallback to standard Selenium WebDriver...")
+            try:
+                from selenium.webdriver.chrome.service import Service
+                
+                # Setup standard chrome options by copying arguments to avoid incompatibilities
+                std_options = webdriver.ChromeOptions()
+                for arg in chrome_options.arguments:
+                    std_options.add_argument(arg)
+                
+                if os.path.exists('/usr/bin/chromium'):
+                    std_options.binary_location = '/usr/bin/chromium'
+                    service = Service('/usr/bin/chromedriver')
+                else:
+                    from webdriver_manager.chrome import ChromeDriverManager
+                    service = Service(ChromeDriverManager().install())
+                    
+                driver = webdriver.Chrome(service=service, options=std_options)
+                log("Standard Selenium WebDriver launched successfully via fallback.")
+            except Exception as e2:
+                log(f"Standard Selenium fallback also failed: {e2}")
+                return {"status": "error", "message": f"All Selenium setups failed. UC Error: {e}, Standard Error: {e2}"}
 
         # Disable webdriver flag via script
         driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
