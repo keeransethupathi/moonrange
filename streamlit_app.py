@@ -587,11 +587,16 @@ elif menu == "🔐 Login Portal": # Login Portal
 
     # Universal Cloud Connector (Recommended for Cloud Users)
     st.subheader("☁️ Universal Cloud Connector (Resident IP Bypass)")
-    with st.expander("Use this if Auto-Login fails with 'INVALID_IP' (Streamlit Cloud / GitHub)", expanded=True):
+    with st.expander("Final Solution: Use `resolve_token.py` if Auto-Login/Browser fails!", expanded=True):
         st.markdown("""
-        1. **Login**: Click the button below to open Flattrade in a new tab.
-        2. **Capture URL**: Complete the login. You'll land on a Google Page. **Copy the FULL URL** from your browser address bar.
-        3. **Resolve Token**: Paste the URL into the 'Cloud Resolve' tool below to generate your token from your home IP.
+        If you get `INVALID_IP` or `Failed to fetch`, use the **Local Resolver** on your own PC:
+        1. **Sync**: Ensure you have latest code on your PC (`git pull`).
+        2. **Run**: Open a terminal in your project folder and run:
+           ```bash
+           python resolve_token.py
+           ```
+        3. **Resolve**: Paste the Google URL into the terminal. It will generate your token using your **Home IP**.
+        4. **Automatic**: It automatically saves to `flattrade_auth.json` and connects your account!
         """)
         
         st.link_button("Step 1: Open Flattrade Login 🔗", AUTH_URL, use_container_width=True)
