@@ -27,6 +27,7 @@ jobs:
           FT_USERNAME: ${{ secrets.FT_USERNAME }}
           FT_PASSWORD: ${{ secrets.FT_PASSWORD }}
           FT_TOTP_SECRET: ${{ secrets.FT_TOTP_SECRET }}
+          FT_TOTP_KEY: ${{ secrets.FT_TOTP_KEY }}
           FT_API_KEY: ${{ secrets.FT_API_KEY }}
           FT_API_SECRET: ${{ secrets.FT_API_SECRET }}
         run: python headless_login.py
