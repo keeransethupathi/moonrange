@@ -597,6 +597,9 @@ elif menu == "🔐 Login Portal": # Login Portal
                             status.update(label="Login Successful!", state="complete")
                         else:
                             st.error(f"Token Generation Failed: {res.get('message')}")
+                            with st.expander("Full Activity Log (Diagnostics)"):
+                                for log in logs:
+                                    st.write(f"› {log}")
                             status.update(label="Token Generation Failed", state="error")
                     else:
                         st.error(f"Automation failed: {result.get('message')}")

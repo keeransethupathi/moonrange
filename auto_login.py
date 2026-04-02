@@ -353,19 +353,27 @@ def auto_login(creds=None, headless=False, log_func=None):
             
             fetch("https://authapi.flattrade.in/trade/apitoken", {
                 method: "POST",
-                headers: { "Content-Type": "application/json" },
+                headers: { 
+                    "Content-Type": "application/json",
+                    "Accept": "application/json, text/plain, */*"
+                },
                 body: JSON.stringify(payload)
             })
-            .then(response => response.json())
-            .then(data => callback({status: "success", data: data}))
-            .catch(err => callback({status: "error", message: err.message}));
+            .then(async response => {
+                const text = await response.text();
+                let data;
+                try { data = JSON.parse(text); } catch(e) { data = { stat: "Not Ok", emsg: "Raw: " + text.substring(0, 100) }; }
+                callback({status: "success", data: data, statusCode: response.status});
+            })
+            .catch(err => callback({status: "error", message: err.toString()}));
             """
             
             try:
-                # Navigate to the target API domain first to satisfy Same-Origin policy
-                # This prevents the browser from blocking the cross-origin POST request
-                driver.get("https://authapi.flattrade.in/")
-                time.sleep(1)
+                # Use current page but check if we can navigate to flattrade domain to avoid CORS
+                if "flattrade.in" not in driver.current_url:
+                    log("Navigating to authapi.flattrade.in to avoid CORS/Origin blocks...")
+                    driver.get("https://authapi.flattrade.in/trade/apitoken") # This usually returns 405/404 but sets origin
+                    time.sleep(1)
                 
                 # Execute the fetch request inside the browser console
                 token_res = driver.execute_async_script(exchange_js, creds['api_key'], request_code, hash_value)
@@ -376,7 +384,9 @@ def auto_login(creds=None, headless=False, log_func=None):
                         log("✅ In-Browser Token Exchange SUCCESSFUL!")
                         return {"status": "success", "code": request_code, "token": data["token"]}
                     else:
-                        log(f"⚠️ In-Browser API Error: {data.get('emsg', 'Unknown')}")
+                        emsg = data.get('emsg', 'Unknown')
+                        log(f"⚠️ In-Browser API Error: {emsg}")
+                        # If the browser says INVALID_IP, we are in trouble, but let's see.
                 else:
                     log(f"⚠️ In-Browser Script Error: {token_res.get('message', 'Unknown')}")
             except Exception as e:
@@ -460,8 +470,16 @@ def generate_access_token(request_code, api_key=None, api_secret=None):
         "api_secret": hash_value
     }
 
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        "Accept": "application/json, text/plain, */*",
+        "Content-Type": "application/json",
+        "Origin": "https://auth.flattrade.in",
+        "Referer": "https://auth.flattrade.in/",
+    }
+
     try:
-        response = requests.post(token_url, json=payload, timeout=10)
+        response = requests.post(token_url, json=payload, headers=headers, timeout=10)
         if response.status_code == 200:
             data = response.json()
             if data.get("stat") == "Ok":
