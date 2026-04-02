@@ -585,6 +585,84 @@ elif menu == "🔐 Login Portal": # Login Portal
             st.error(f"An unexpected error occurred: {e}")
             st.exception(e)
 
+    # Universal Cloud Connector (Recommended for Cloud Users)
+    st.subheader("☁️ Universal Cloud Connector (Resident IP Bypass)")
+    with st.expander("Use this if Auto-Login fails with 'INVALID_IP' (Streamlit Cloud / GitHub)", expanded=True):
+        st.markdown("""
+        1. **Login**: Click the button below to open Flattrade in a new tab.
+        2. **Capture URL**: Complete the login. You'll land on a Google Page. **Copy the FULL URL** from your browser address bar.
+        3. **Resolve Token**: Paste the URL into the 'Cloud Resolve' tool below to generate your token from your home IP.
+        """)
+        
+        st.link_button("Step 1: Open Flattrade Login 🔗", AUTH_URL, use_container_width=True)
+        
+        # Browser-side HTML/JS Helper for same-origin fetch (CORS Immune on User's Resident IP)
+        cloud_helper_html = f"""
+        <div style="background: #1e1e1e; padding: 15px; border-radius: 8px; border: 1px solid #444; color: white; font-family: sans-serif;">
+            <p style="margin-top: 0; color: #aaa; font-size: 0.9em;">Step 2: Paste Google Redirect URL below</p>
+            <input type="text" id="redirect_url" placeholder="https://www.google.com/?code=...&client=..." 
+                   style="width: 100%; padding: 10px; background: #2b2b2b; border: 1px solid #555; color: white; border-radius: 4px; box-sizing: border-box;">
+            <button onclick="resolveToken()" 
+                    style="margin-top: 10px; width: 100%; padding: 10px; background: #FF4B4B; border: none; color: white; border-radius: 4px; cursor: pointer; font-weight: bold;">
+                Resolve Token (Bypass IP Block) 🚀
+            </button>
+            <div id="result_area" style="margin-top: 15px; display: none;">
+                <p style="margin-bottom: 5px; color: #00ff00;">✅ Token Generated (Residential IP):</p>
+                <div id="token_display" style="background: #000; padding: 10px; border: 1px dashed #00ff00; word-break: break-all; font-family: monospace; font-size: 0.8em; margin-bottom: 10px;"></div>
+                <p style="font-size: 0.8em; color: #888;">Step 3: Copy this token and paste it into the 'Manual Token' field below.</p>
+            </div>
+            <div id="error_area" style="margin-top: 15px; color: #ff4b4b; display: none; font-size: 0.9em;"></div>
+        </div>
+
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/crypto-js/4.1.1/crypto-js.min.js"></script>
+        <script>
+        async function resolveToken() {{
+            const urlInput = document.getElementById('redirect_url').value;
+            const resultArea = document.getElementById('result_area');
+            const errorArea = document.getElementById('error_area');
+            const tokenDisplay = document.getElementById('token_display');
+            
+            resultArea.style.display = 'none';
+            errorArea.style.display = 'none';
+            
+            try {{
+                const url = new URL(urlInput);
+                const requestCode = url.searchParams.get('code');
+                if (!requestCode) throw new Error("Could not find 'code' in the URL. Please ensure you copied the full Google URL.");
+                
+                const apiKey = "{API_KEY}";
+                const apiSecret = "{API_SECRET}";
+                const hashInput = apiKey + requestCode + apiSecret;
+                const apiSecretHash = CryptoJS.SHA256(hashInput).toString();
+                
+                const payload = {{
+                    "api_key": apiKey,
+                    "request_code": requestCode,
+                    "api_secret": apiSecretHash
+                }};
+
+                const response = await fetch("https://authapi.flattrade.in/trade/apitoken", {{
+                    method: 'POST',
+                    headers: {{ 'Content-Type': 'application/json' }},
+                    body: JSON.stringify(payload)
+                }});
+
+                const data = await response.json();
+                if (data.stat === "Ok") {{
+                    tokenDisplay.innerText = data.token;
+                    resultArea.style.display = 'block';
+                }} else {{
+                    throw new Error(data.emsg || "Flattrade API rejected the token request.");
+                }}
+            }} catch (err) {{
+                errorArea.innerText = "❌ Error: " + err.message;
+                errorArea.style.display = 'block';
+            }}
+        }}
+        </script>
+        """
+        st.components.v1.html(cloud_helper_html, height=350)
+
     st.divider()
     
     # Manual Token Injection (Fix for Cloud INVALID_IP)
