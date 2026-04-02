@@ -129,12 +129,17 @@ def auto_login(creds=None, headless=False, log_func=None):
                 for p in potential_paths:
                     if os.path.exists(p):
                         linux_chrome_path = p
-                        log(f"Detected Linux Chrome at: {linux_chrome_path}")
+                        # Try to detect version from the binary itself on Linux
+                        try:
+                            v_out = subprocess.check_output([linux_chrome_path, '--version']).decode()
+                            version_main = int(v_out.strip().split()[-1].split('.')[0])
+                            log(f"Detected Linux Chrome version: {version_main} at {linux_chrome_path}")
+                        except: pass
                         break
             
             if linux_chrome_path:
                 chrome_options.binary_location = linux_chrome_path
-                driver = uc.Chrome(options=chrome_options, browser_executable_path=linux_chrome_path, use_subprocess=True)
+                driver = uc.Chrome(options=chrome_options, browser_executable_path=linux_chrome_path, use_subprocess=True, version_main=version_main)
             else:
                 # Fallback for Windows or default search
                 driver = uc.Chrome(options=chrome_options, use_subprocess=True, version_main=version_main)
@@ -305,60 +310,59 @@ def auto_login(creds=None, headless=False, log_func=None):
             
             # 2. If it failed with INVALID_IP, try the In-Browser Bypass (Best for Cloud)
             if "INVALID_IP" in str(res.get("message", "")):
-                log("⚠️ Python Exchange failed with INVALID_IP. Attempting 'Hammer' Form-POST Bypass...")
+                log("⚠️ Python Exchange failed with INVALID_IP. Attempting 'Same-Origin' Bypass...")
                 
                 hash_payload = (creds['api_key'] + request_code + creds['api_secret']).encode()
                 hash_value = hashlib.sha256(hash_payload).hexdigest()
                 
-                # We use a standard HTML form submission to bypass CORS entirely
-                # This triggers a top-level navigation, which is NOT subject to CORS blocks.
-                submit_js = """
-                var form = document.createElement('form');
-                form.method = 'POST';
-                form.action = 'https://authapi.flattrade.in/trade/apitoken';
+                # Navigate to the API's own subdomain to make it a 'Same-Origin' request
+                # Same-origin requests bypass CORS completely!
+                api_subdomain = "https://authapi.flattrade.in/trade/login"
+                log(f"Navigating to {api_subdomain} to establish Same-Origin trust...")
+                driver.get(api_subdomain)
+                time.sleep(2)
                 
-                var fields = {
+                exchange_js = """
+                var callback = arguments[arguments.length - 1];
+                var payload = {
                     "api_key": arguments[0],
                     "request_code": arguments[1],
                     "api_secret": arguments[2]
                 };
                 
-                for (var key in fields) {
-                    var input = document.createElement('input');
-                    input.type = 'hidden';
-                    input.name = key;
-                    input.value = fields[key];
-                    form.appendChild(input);
-                }
-                
-                document.body.appendChild(form);
-                form.submit();
+                // This is now a Same-Origin request. No CORS blocks!
+                fetch("/trade/apitoken", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(payload)
+                })
+                .then(async response => {
+                    const text = await response.text();
+                    let data;
+                    try { 
+                        data = JSON.parse(text); 
+                    } catch(e) { 
+                        data = { stat: "Not Ok", emsg: "Raw: " + text.substring(0, 50) }; 
+                    }
+                    callback({status: "success", data: data});
+                })
+                .catch(err => callback({status: "error", message: err.toString()}));
                 """
                 
                 try:
-                    # 1. Trigger the form submission
-                    driver.execute_script(submit_js, creds['api_key'], request_code, hash_value)
-                    log("Form submitted. Waiting for JSON response page...")
+                    token_res = driver.execute_async_script(exchange_js, creds['api_key'], request_code, hash_value)
                     
-                    # 2. Wait for the browser to load the result page (usually just plain text/json)
-                    time.sleep(3)
-                    
-                    # 3. Capture the JSON from the page source
-                    page_text = driver.page_source
-                    # Extract JSON from <pre> or just raw text
-                    if "{" in page_text:
-                        json_str = page_text[page_text.find("{"):page_text.rfind("}")+1]
-                        data = json.loads(json_str)
-                        
+                    if token_res["status"] == "success":
+                        data = token_res["data"]
                         if data.get("stat") == "Ok":
-                            log("✅ 'Hammer' Bypass SUCCESSFUL!")
+                            log("✅ 'Same-Origin' Bypass SUCCESSFUL!")
                             return {"status": "success", "code": request_code, "token": data["token"]}
                         else:
-                            log(f"⚠️ 'Hammer' API Error: {data.get('emsg', 'Unknown')}")
+                            log(f"⚠️ Bypass API Error: {data.get('emsg', 'Unknown')}")
                     else:
-                        log("⚠️ 'Hammer' Bypass failed: No JSON found in response page.")
+                        log(f"⚠️ Bypass Script Error: {token_res.get('message', 'Unknown')}")
                 except Exception as e:
-                    log(f"⚠️ 'Hammer' Bypass failed: {e}")
+                    log(f"⚠️ Same-Origin Bypass failed: {e}")
             else:
                 log(f"⚠️ Python Exchange failed: {res.get('message')}")
                 
