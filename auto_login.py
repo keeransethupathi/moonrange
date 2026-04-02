@@ -51,6 +51,10 @@ def auto_login(creds=None, headless=False, log_func=None):
                 return {"status": "error", "message": "Missing credentials"}
 
     # Generate TOTP
+    if not creds.get('totp_key'):
+        log("Error: Missing TOTP key in credentials.")
+        return {"status": "error", "message": "Missing TOTP key"}
+        
     totp = pyotp.TOTP(creds['totp_key'])
     token = totp.now()
     log(f"Generated TOTP: {token}")
@@ -58,10 +62,14 @@ def auto_login(creds=None, headless=False, log_func=None):
     # Setup Selenium via undetected_chromedriver
     chrome_options = uc.ChromeOptions()
     
-    # Create a persistent user data directory to store cookies/session and look more "human"
-    user_data_dir = os.path.join(os.getcwd(), 'chrome_profile')
+    # Use /tmp on Linux for chrome_profile to avoid permission/disk-full issues in fixed st.app containers
+    if os.name != 'nt' or os.path.exists('/usr/bin/chromium'):
+        user_data_dir = os.path.join('/tmp', 'chrome_profile')
+    else:
+        user_data_dir = os.path.join(os.getcwd(), 'chrome_profile')
+        
     if not os.path.exists(user_data_dir):
-        os.makedirs(user_data_dir)
+        os.makedirs(user_data_dir, exist_ok=True)
     chrome_options.add_argument(f"--user-data-dir={user_data_dir}")
     
     # Bypassing CORS and Site Isolation (Nuclear Option)
@@ -73,6 +81,10 @@ def auto_login(creds=None, headless=False, log_func=None):
         chrome_options.add_argument("--window-size=1920,1080")
         chrome_options.add_argument("--no-sandbox")
         chrome_options.add_argument("--disable-dev-shm-usage")
+        chrome_options.add_argument("--disable-gpu")
+        chrome_options.add_argument("--disable-software-rasterizer")
+        chrome_options.add_argument("--shm-size=2gb")
+        chrome_options.add_argument("--remote-debugging-port=9222")
     
     # Aggressive stealth arguments
     chrome_options.add_argument("--disable-blink-features=AutomationControlled")

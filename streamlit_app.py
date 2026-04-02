@@ -551,7 +551,15 @@ elif menu == "🔐 Login Portal": # Login Portal
                 if not os.path.exists('credentials.json') and not has_secrets:
                     st.error("No credentials found. Please set FT environment variables / secrets or provide `credentials.json`.")
                 else:
-                    result = auto_login(headless=True, log_func=ui_logger)
+                    # Explicitly build creds to pass to auto_login to ensure cloud compatibility
+                    login_creds = {
+                        'username': safe_get_secret('FT_USERNAME'),
+                        'password': safe_get_secret('FT_PASSWORD'),
+                        'totp_key': safe_get_secret('FT_TOTP_KEY'),
+                        'api_key': API_KEY,
+                        'api_secret': API_SECRET
+                    }
+                    result = auto_login(creds=login_creds, headless=True, log_func=ui_logger)
                     
                     if result["status"] == "success":
                         request_code = result["code"]
