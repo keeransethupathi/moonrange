@@ -75,12 +75,9 @@ def auto_login(creds=None, headless=False, log_func=None):
     # Setup Selenium via undetected_chromedriver
     chrome_options = uc.ChromeOptions()
     
-    # Use /tmp on Linux for chrome_profile to avoid permission/disk-full issues in fixed st.app containers
-    if os.name != 'nt' or os.path.exists('/usr/bin/chromium'):
-        user_data_dir = os.path.join('/tmp', 'chrome_profile')
-    else:
-        user_data_dir = os.path.join(os.getcwd(), 'chrome_profile')
-        
+    # Absolute Session Isolation: Always use a fresh, unique profile to prevent FTACKM04 session conflicts
+    import tempfile
+    user_data_dir = os.path.join(tempfile.gettempdir(), f'chrome_profile_{int(time.time())}')
     if not os.path.exists(user_data_dir):
         os.makedirs(user_data_dir, exist_ok=True)
     chrome_options.add_argument(f"--user-data-dir={user_data_dir}")
@@ -108,33 +105,55 @@ def auto_login(creds=None, headless=False, log_func=None):
         
         try:
             # Try undetected_chromedriver first (works best for local/Windows)
-            # If we are on Streamlit Cloud (Linux), specify the chromium binary explicitly
+            # Detect browser version to avoid version mismatch errors
+            version_main = None
+            try:
+                import subprocess
+                if os.name == 'nt':
+                    cmd = r'reg query "HKEY_CURRENT_USER\Software\Google\Chrome\BLBeacon" /v version'
+                    output = subprocess.check_output(cmd, shell=True).decode()
+                    version_main = int(output.strip().split()[-1].split('.')[0])
+                    log(f"Detected local Chrome version: {version_main}")
+            except:
+                pass
+
             if os.path.exists('/usr/bin/chromium'):
                 log("Detected Streamlit Cloud environment. Forcing Chromium path for UC.")
                 chrome_options.binary_location = '/usr/bin/chromium'
                 driver = uc.Chrome(options=chrome_options, browser_executable_path='/usr/bin/chromium', use_subprocess=True)
             else:
-                driver = uc.Chrome(options=chrome_options, use_subprocess=True)
+                # Use detected version to avoid "session not created" errors
+                driver = uc.Chrome(options=chrome_options, use_subprocess=True, version_main=version_main)
         except Exception as e:
             log(f"Undetected ChromeDriver setup failed: {e}")
-            log("Attempting fallback to standard Selenium WebDriver...")
+            log("Attempting fallback to 'Stealthy' Standard Selenium WebDriver...")
             try:
                 from selenium.webdriver.chrome.service import Service
+                from webdriver_manager.chrome import ChromeDriverManager
                 
-                # Setup standard chrome options by copying arguments to avoid incompatibilities
                 std_options = webdriver.ChromeOptions()
-                for arg in chrome_options.arguments:
-                    std_options.add_argument(arg)
+                # Essential stealth for standard fallback
+                std_options.add_argument("--disable-blink-features=AutomationControlled")
+                std_options.add_experimental_option("excludeSwitches", ["enable-automation"])
+                std_options.add_experimental_option('useAutomationExtension', False)
                 
-                if os.path.exists('/usr/bin/chromium'):
-                    std_options.binary_location = '/usr/bin/chromium'
-                    service = Service('/usr/bin/chromedriver')
+                for arg in chrome_options.arguments:
+                    if "headless" in arg or "no-sandbox" in arg or "disable-gpu" in arg:
+                        std_options.add_argument(arg)
+                
+                if os.name != 'nt':
+                    std_options.binary_location = '/usr/bin/chromium' if os.path.exists('/usr/bin/chromium') else '/usr/bin/google-chrome'
+                    service = Service('/usr/bin/chromedriver') if os.path.exists('/usr/bin/chromedriver') else Service(ChromeDriverManager().install())
                 else:
-                    from webdriver_manager.chrome import ChromeDriverManager
                     service = Service(ChromeDriverManager().install())
                     
                 driver = webdriver.Chrome(service=service, options=std_options)
-                log("Standard Selenium WebDriver launched successfully via fallback.")
+                
+                # Spoof navigator.webdriver
+                driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
+                    "source": "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
+                })
+                log("Standard Selenium WebDriver launched with hardened stealth.")
             except Exception as e2:
                 log(f"Standard Selenium fallback also failed: {e2}")
                 return {"status": "error", "message": f"All Selenium setups failed. UC Error: {e}, Standard Error: {e2}"}
