@@ -1,0 +1,40 @@
+name: Flattrade Auto Auth Sync
+
+on:
+  schedule:
+    - cron: '30 3 * * *'  # Runs at 9:00 AM IST (3:30 AM UTC) daily for market open
+  workflow_dispatch:      # Allows manual trigger
+
+jobs:
+  auth:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run Headless Login
+        env:
+          FT_USERNAME: ${{ secrets.FT_USERNAME }}
+          FT_PASSWORD: ${{ secrets.FT_PASSWORD }}
+          FT_TOTP_SECRET: ${{ secrets.FT_TOTP_SECRET }}
+          FT_API_KEY: ${{ secrets.FT_API_KEY }}
+          FT_API_SECRET: ${{ secrets.FT_API_SECRET }}
+        run: python headless_login.py
+
+      - name: Commit and Push Auth Token
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add flattrade_auth.json
+          git commit -m "chore: auto-update flattrade_auth.json [skip ci]" || echo "No changes to commit"
+          git push origin main
