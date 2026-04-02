@@ -389,51 +389,28 @@ if menu == "📊 Dashboard":
         st.divider()
         
         if not st.session_state.backend_running:
-            if st.button("🚀 Start Backend System", type="primary"):
-                if not os.path.exists("auth.json"):
-                    st.error("Authentication file `auth.json` not found. Please login via 'Login Portal' first.")
+            if st.button("🚀 Start Unified Backend", type="primary", use_container_width=True):
+                if not os.path.exists("flattrade_auth.json"):
+                    st.error("Authentication file `flattrade_auth.json` not found. Please login via 'Login Portal' first.")
                 else:
-                    with open("auth.json", "r") as f:
-                        auth_data = json.load(f)
+                    # START UNIFIED BACKEND via flattrade_indices.py
+                    # 1. Ensure config exists
+                    if not os.path.exists("dashboard_config.json"):
+                        with open("dashboard_config.json", "w") as f:
+                           json.dump({
+                               "token": st.session_state.dashboard_token,
+                               "exch": st.session_state.dashboard_exchange,
+                               "range": st.session_state.get('dashboard_range', 0.05)
+                           }, f)
                     
-                    # Ensure API Key is present (might be in secrets)
-                    if "api_key" not in auth_data:
-                        auth_data["api_key"] = safe_get_secret("ANGEL_API_KEY")
-                    
-                    if not auth_data.get("api_key"):
-                        st.error("AngelOne API Key not found in auth.json or secrets.")
-                    else:
-                        # START BACKEND via Subprocess (External Process)
-                        # First check if it's already actually online locally
-                        is_already_online = False
-                        DATA_FILE = "market_data.json"
-                        if os.path.exists(DATA_FILE):
-                            try:
-                                with open(DATA_FILE, "r") as f:
-                                    data = json.load(f)
-                                if time.time() - data.get("last_update", 0) < 10:
-                                    is_already_online = True
-                            except:
-                                pass
-                        
-                        if is_already_online:
-                            st.warning(f"Backend for {token_id} is already running locally.")
-                        else:
-                            import subprocess
-                            python_exe = sys.executable
-                            cmd = [python_exe, "backend.py", str(exchange_type), str(token_id), str(range_val)]
-                            
-                            # Launch backend.py as a separate process in a new console
-                            subprocess.Popen(cmd, creationflags=subprocess.CREATE_NEW_CONSOLE if os.name == 'nt' else 0)
-                            st.success(f"System Launching for {selected_exchange_name}:{token_id} with Range {range_val}...")
-                        
-                        st.session_state.backend_running = True
-                        time.sleep(2)
-                        st.rerun()
+                    # 2. Launch (it handles its own singleton status)
+                    launch_indices_backend(force=True)
+                    st.session_state.backend_running = True
+                    st.success("Unified Backend Launching...")
+                    time.sleep(1)
+                    st.rerun()
         else:
-            if st.button("🛑 Stop Backend System"):
-                # Signal stop via file (backend.py checks for STOP_FILE)
-                STOP_FILE = "stop_backend.txt"
+            if st.button("🛑 Stop Unified Backend", use_container_width=True):
                 with open(STOP_FILE, "w") as f:
                     f.write("stop")
                 st.session_state.backend_running = False
@@ -974,6 +951,15 @@ elif menu == "📦 Scrip Master":
             if st.button(f"📊 Track {token_data['symbol']}", key=f"track_{token_data['token']}", use_container_width=True):
                 st.session_state.dashboard_token = str(token_data['token'])
                 st.session_state.dashboard_exchange = token_data['exch_seg']
+                
+                # Update Unified Backend Config
+                with open("dashboard_config.json", "w") as f:
+                    json.dump({
+                        "token": str(token_data['token']),
+                        "exch": token_data['exch_seg'],
+                        "range": st.session_state.get('dashboard_range', 0.05)
+                    }, f)
+                
                 # Sync with Order Portal
                 st.session_state.trade_tsym_input = tsym
                 st.session_state.trade_tsym = tsym
