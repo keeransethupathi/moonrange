@@ -17,8 +17,18 @@ def resolve():
         print("❌ Error: credentials.json not found in this folder.")
         return
 
+    api_key = creds.get("api_key", "").strip()
+    api_secret = creds.get("api_secret", "").strip()
+    
+    if not api_key or not api_secret:
+        print("❌ Error: credentials.json is missing api_key or api_secret.")
+        return
+
+    print(f"Using API Key ending in: ...{api_key[-4:]}")
+    print(f"Using API Secret ending in: ...{api_secret[-4:]}")
+
     # 2. Get Redirect URL
-    url_input = input("\nStep 1: Open Flattrade Login and authorize.\nStep 2: Paste the FULL Google Redirect URL here: \n> ")
+    url_input = input("\nStep 1: Open Flattrade Login and authorize.\nStep 2: Paste the FULL Google Redirect URL here: \n> ").strip()
     
     try:
         # Extract request_code
@@ -28,14 +38,6 @@ def resolve():
         
         request_code = url_input.split("code=")[1].split("&")[0]
         print(f"✅ Captured Code: {request_code[:10]}...")
-
-        # 3. Generate SHA256 Hash
-        api_key = creds.get("api_key")
-        api_secret = creds.get("api_secret")
-        
-        if not api_key or not api_secret:
-            print("❌ Error: credentials.json is missing api_key or api_secret.")
-            return
 
         hash_payload = (api_key + request_code + api_secret).encode()
         hash_value = hashlib.sha256(hash_payload).hexdigest()
