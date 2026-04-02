@@ -610,6 +610,26 @@ elif menu == "🔐 Login Portal": # Login Portal
 
     st.divider()
     
+    # Manual Token Injection (Fix for Cloud INVALID_IP)
+    with st.expander("💉 Manual Token Injection (Cloud Fallback)"):
+        st.info("If Auto Login fails on Streamlit Cloud due to `INVALID_IP`, run the app once **locally** on your PC and paste the generated `jKey` here.")
+        manual_token = st.text_input("Enter Flattrade Session Token (jKey)", type="password", key="manual_token_input")
+        if st.button("Save Manual Token"):
+            if manual_token:
+                # Use the API_KEY defined in the Flattrade section
+                try:
+                    flat_auth = {"api_key": API_KEY, "token": manual_token}
+                    with open("flattrade_auth.json", "w") as f:
+                        json.dump(flat_auth, f, indent=4)
+                    st.success("Manual token saved to `flattrade_auth.json`!")
+                    st.rerun()
+                except NameError:
+                    st.error("API Key not found. Please ensure Flattrade credentials are set.")
+            else:
+                st.warning("Please enter a valid token.")
+
+    st.divider()
+    
     # Credential Manager
     with st.expander("🔐 Credential Manager"):
         st.write("Update your Flattrade credentials below. Changes will be saved to `credentials.json`.")
