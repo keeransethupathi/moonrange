@@ -17,7 +17,20 @@ import urllib3.util.connection as urllib3_cn
 # Force IPv4 for the requests library to prevent Flattrade from receiving IPv6 connections and throwing INVALID_IP
 def allowed_gai_family():
     return socket.AF_INET
-urllib3_cn.allowed_gai_family = allowed_gai_family
+
+# Patch urllib3.util.connection BEFORE any requests are made
+try:
+    import urllib3.util.connection as urllib3_cn
+    urllib3_cn.allowed_gai_family = allowed_gai_family
+except:
+    pass
+
+def get_outbound_ip():
+    """Diagnostic helper to see which IP Flattrade sees"""
+    try:
+        return requests.get("https://api.ipify.org", timeout=5).text
+    except:
+        return "Unknown"
 
 def auto_login(creds=None, headless=False, log_func=None):
     def log(msg):
@@ -85,10 +98,12 @@ def auto_login(creds=None, headless=False, log_func=None):
         chrome_options.add_argument("--disable-software-rasterizer")
         chrome_options.add_argument("--shm-size=2gb")
         chrome_options.add_argument("--remote-debugging-port=9222")
+        chrome_options.add_argument("--address-family=ipv4")
     
     # Aggressive stealth arguments
     chrome_options.add_argument("--disable-blink-features=AutomationControlled")
     chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36")
+    chrome_options.add_argument("--disable-features=IsolateOrigins,site-per-process")
         
     driver = None
     try:
@@ -388,6 +403,10 @@ def generate_access_token(request_code, api_key=None, api_secret=None):
     # Logic: SHA256(api_key + request_code + api_secret)
     hash_payload = (creds['api_key'] + request_code + creds['api_secret']).encode()
     hash_value = hashlib.sha256(hash_payload).hexdigest()
+
+    # Diagnostic: Log IP
+    current_ip = get_outbound_ip()
+    print(f"DIAGNOSTIC: Token request outbound IP: {current_ip}")
 
     payload = {
         "api_key": creds['api_key'],

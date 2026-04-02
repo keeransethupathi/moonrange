@@ -462,6 +462,14 @@ if menu == "📊 Dashboard":
     display_dashboard_fragment(token_id, exchange_type, exchange_mapping)
 
 elif menu == "🔐 Login Portal": # Login Portal
+    # Diagnostic: Show IP to verify IPv4 enforcement
+    try:
+        from auto_login import get_outbound_ip
+        current_ip = get_outbound_ip()
+        st.caption(f"🌐 Outbound IP (Diagnostic): `{current_ip}`")
+    except:
+        pass
+        
     st.header("🔐 AngelOne Login")
     
     existing_auth = {}
