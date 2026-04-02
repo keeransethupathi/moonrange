@@ -602,27 +602,22 @@ elif menu == "🔐 Login Portal": # Login Portal
             <p style="margin-top: 0; color: #aaa; font-size: 0.9em;">Step 2: Paste Google Redirect URL below</p>
             <input type="text" id="redirect_url" placeholder="https://www.google.com/?code=...&client=..." 
                    style="width: 100%; padding: 10px; background: #2b2b2b; border: 1px solid #555; color: white; border-radius: 4px; box-sizing: border-box;">
+            
+            <p style="margin-top: 15px; margin-bottom: 5px; color: #aaa; font-size: 0.9em;">Step 3: Resolve Token (Standard Form Submission)</p>
             <button onclick="resolveToken()" 
-                    style="margin-top: 10px; width: 100%; padding: 10px; background: #FF4B4B; border: none; color: white; border-radius: 4px; cursor: pointer; font-weight: bold;">
-                Resolve Token (Bypass IP Block) 🚀
+                    style="width: 100%; padding: 10px; background: #FF4B4B; border: none; color: white; border-radius: 4px; cursor: pointer; font-weight: bold;">
+                Open Token Generator 🚀 (CORS-Immune)
             </button>
-            <div id="result_area" style="margin-top: 15px; display: none;">
-                <p style="margin-bottom: 5px; color: #00ff00;">✅ Token Generated (Residential IP):</p>
-                <div id="token_display" style="background: #000; padding: 10px; border: 1px dashed #00ff00; word-break: break-all; font-family: monospace; font-size: 0.8em; margin-bottom: 10px;"></div>
-                <p style="font-size: 0.8em; color: #888;">Step 3: Copy this token and paste it into the 'Manual Token' field below.</p>
-            </div>
+            <p style="margin-top: 10px; font-size: 0.8em; color: #888;">Note: This will open a <b>New Tab</b> with a JSON response. <b>Copy the 'token' string</b> from that tab and paste it into the field below.</p>
+            
             <div id="error_area" style="margin-top: 15px; color: #ff4b4b; display: none; font-size: 0.9em;"></div>
         </div>
 
         <script src="https://cdnjs.cloudflare.com/ajax/libs/crypto-js/4.1.1/crypto-js.min.js"></script>
         <script>
-        async function resolveToken() {{
+        function resolveToken() {{
             const urlInput = document.getElementById('redirect_url').value;
-            const resultArea = document.getElementById('result_area');
             const errorArea = document.getElementById('error_area');
-            const tokenDisplay = document.getElementById('token_display');
-            
-            resultArea.style.display = 'none';
             errorArea.style.display = 'none';
             
             try {{
@@ -635,25 +630,30 @@ elif menu == "🔐 Login Portal": # Login Portal
                 const hashInput = apiKey + requestCode + apiSecret;
                 const apiSecretHash = CryptoJS.SHA256(hashInput).toString();
                 
-                const payload = {{
+                // CREATE A HIDDEN FORM AND SUBMIT IT (Invincible against CORS)
+                var form = document.createElement('form');
+                form.method = 'POST';
+                form.action = 'https://authapi.flattrade.in/trade/apitoken';
+                form.target = '_blank'; // Open in a new tab
+                
+                var fields = {{
                     "api_key": apiKey,
                     "request_code": requestCode,
                     "api_secret": apiSecretHash
                 }};
-
-                const response = await fetch("https://authapi.flattrade.in/trade/apitoken", {{
-                    method: 'POST',
-                    headers: {{ 'Content-Type': 'application/json' }},
-                    body: JSON.stringify(payload)
-                }});
-
-                const data = await response.json();
-                if (data.stat === "Ok") {{
-                    tokenDisplay.innerText = data.token;
-                    resultArea.style.display = 'block';
-                }} else {{
-                    throw new Error(data.emsg || "Flattrade API rejected the token request.");
+                
+                for (var key in fields) {{
+                    var input = document.createElement('input');
+                    input.type = 'hidden';
+                    input.name = key;
+                    input.value = fields[key];
+                    form.appendChild(input);
                 }}
+                
+                document.body.appendChild(form);
+                form.submit();
+                document.body.removeChild(form);
+                
             }} catch (err) {{
                 errorArea.innerText = "❌ Error: " + err.message;
                 errorArea.style.display = 'block';
@@ -661,7 +661,7 @@ elif menu == "🔐 Login Portal": # Login Portal
         }}
         </script>
         """
-        st.components.v1.html(cloud_helper_html, height=350)
+        st.components.v1.html(cloud_helper_html, height=300)
 
     st.divider()
     
