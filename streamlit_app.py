@@ -514,9 +514,15 @@ elif menu == "🔐 Login Portal": # Login Portal
 
     # Automated Login Section
     st.subheader("🤖 Automated Login")
-    st.info("Click the button below to automatically login and generate your access token.")
     
-    if st.button("🚀 Run Auto Login", type="primary", use_container_width=True):
+    # Cloud Detection Warning
+    is_cloud = "STREAMLIT_RUNTIME_ENV" in os.environ or os.environ.get("HOSTNAME") == "streamlit"
+    if is_cloud:
+        st.error("⚠️ **Cloud Restriction**: Flattrade blocks automated login from data-center IPs (Streamlit Cloud). Use the **Universal Cloud Connector** below instead.")
+    else:
+        st.info("Click the button below to automatically login and generate your access token.")
+    
+    if st.button("🚀 Run Auto Login", type="secondary" if is_cloud else "primary", use_container_width=True):
         try:
             from auto_login import auto_login, generate_access_token
             
