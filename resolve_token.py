@@ -27,23 +27,36 @@ def resolve():
     print(f"Using API Key ending in: ...{api_key[-4:]}")
     print(f"Using API Secret ending in: ...{api_secret[-4:]}")
 
-    # 2. Get Redirect URL
-    url_input = input("\nStep 1: Open Flattrade Login and authorize.\nStep 2: Paste the FULL Google Redirect URL here: \n> ").strip()
+    # 2. Get Request Code Directly (Eliminate URL bugs)
+    print("\nStep 1: Open Flattrade Login, authorize, and land on Google.")
+    print("Step 2: Copy ONLY the 'code' from the URL (e.g., becf7...)")
+    request_code = input("Step 3: Paste the Request Code here: \n> ").strip()
     
-    try:
-        # Extract request_code
-        if "code=" not in url_input:
-            print("❌ Error: Could not find 'code=' in the URL. Make sure you copied the whole address.")
-            return
-        
-        request_code = url_input.split("code=")[1].split("&")[0]
-        print(f"✅ Captured Code: {request_code[:10]}...")
+    if not request_code:
+        print("❌ Error: Request Code cannot be empty.")
+        return
 
+    try:
+        # Diagnostic: Show IP to verify we are on a residential network
+        print("\n--- Network Diagnostics ---")
+        try:
+            v4 = requests.get('https://api.ipify.org', timeout=5).text
+            print(f"IPv4 Detected: {v4}")
+        except: print("IPv4: Error (Check internet)")
+        
+        try:
+            v6 = requests.get('https://api6.ipify.org', timeout=5).text
+            print(f"IPv6 Detected: {v6}")
+        except: print("IPv6: None/Not available")
+        
+        print(f"Captured Code: {request_code[:10]}...")
+
+        # 3. Generate SHA256 Hash
         hash_payload = (api_key + request_code + api_secret).encode()
         hash_value = hashlib.sha256(hash_payload).hexdigest()
 
-        # 4. Perform Exchange (From Home IP)
-        print("Exchanging for Access Token...")
+        # 4. Perform Exchange
+        print("\nExchanging for Access Token...")
         url = "https://authapi.flattrade.in/trade/apitoken"
         payload = {
             "api_key": api_key,
@@ -51,24 +64,15 @@ def resolve():
             "api_secret": hash_value
         }
         
-        # Diagnostic: Show IP to verify we are on a residential network
-        try:
-            ip_resp = requests.get('https://api.ipify.org', timeout=5)
-            print(f"DIAGNOSTIC: Local Outbound IP: {ip_resp.text}")
-        except: pass
-
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-            "Accept": "application/json, text/plain, */*",
+            "Accept": "application/json",
             "Content-Type": "application/json",
             "Origin": "https://auth.flattrade.in",
             "Referer": "https://auth.flattrade.in/",
         }
         
-        session = requests.Session()
-        session.headers.update(headers)
-        
-        response = session.post(url, json=payload, timeout=10)
+        response = requests.post(url, json=payload, headers=headers, timeout=15)
         data = response.json()
         
         if data.get("stat") == "Ok":
