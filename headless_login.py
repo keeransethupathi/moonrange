@@ -12,7 +12,7 @@ def main():
     creds = {
         "username": os.environ.get("FT_USERNAME"),
         "password": os.environ.get("FT_PASSWORD"),
-        "totp_key": os.environ.get("FT_TOTP_SECRET"),
+        "totp_key": os.environ.get("FT_TOTP_KEY") or os.environ.get("FT_TOTP_SECRET"),
         "api_key": os.environ.get("FT_API_KEY"),
         "api_secret": os.environ.get("FT_API_SECRET")
     }
