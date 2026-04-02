@@ -291,48 +291,42 @@ def auto_login(creds=None, headless=False, log_func=None):
             
             # 2. If it failed with INVALID_IP, try the In-Browser Bypass (Best for Cloud)
             if "INVALID_IP" in str(res.get("message", "")):
-                log("⚠️ Python Exchange failed with INVALID_IP. Attempting 'Form POST' Bypass...")
+                log("⚠️ Python Exchange failed with INVALID_IP. Attempting 'Origin-Trusted' Bypass...")
                 
                 hash_payload = (creds['api_key'] + request_code + creds['api_secret']).encode()
                 hash_value = hashlib.sha256(hash_payload).hexdigest()
                 
-                # We use a standard HTML form submission to bypass XHR/CORS IP filters
-                submit_js = """
-                var form = document.createElement('form');
-                form.method = 'POST';
-                form.action = 'https://authapi.flattrade.in/trade/apitoken';
+                # IMPORTANT: We MUST be on a Flattrade domain to avoid CORS 'Failed to fetch' errors
+                if "flattrade.in" not in driver.current_url:
+                    log("Navigating to Flattrade origin to satisfy CORS requirements...")
+                    driver.get(f"https://auth.flattrade.in/?app_key={creds['api_key']}")
+                    time.sleep(2)
                 
-                var p = {
+                exchange_js = """
+                var callback = arguments[arguments.length - 1];
+                var payload = {
                     "api_key": arguments[0],
                     "request_code": arguments[1],
                     "api_secret": arguments[2]
                 };
                 
-                // For Flattrade V2, we send the JSON in a hidden input or as the raw body
-                // Actually, most Noren-style APIs expect a raw POST body or a specific form field
-                // But the official 'apitoken' endpoint usually accepts a raw JSON body.
-                // Since a standard form can't easily send a raw JSON body without being 'application/x-www-form-urlencoded',
-                // we'll try a 'fetch' one more time with 'credentials: include' first, 
-                // and if THAT fails, we use the FORM with a single JSON field or just let it fail.
-                
-                // RETHINK: If fetch failed, let's try fetch WITH 'credentials: include' and NO custom headers
                 fetch("https://authapi.flattrade.in/trade/apitoken", {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     credentials: "include", 
-                    body: JSON.stringify(p)
+                    body: JSON.stringify(payload)
                 })
                 .then(async response => {
                     const text = await response.text();
                     let data;
                     try { data = JSON.parse(text); } catch(e) { data = { stat: "Not Ok", emsg: "Raw: " + text.substring(0, 100) }; }
-                    arguments[arguments.length - 1]({status: "success", data: data});
+                    callback({status: "success", data: data});
                 })
-                .catch(err => arguments[arguments.length - 1]({status: "error", message: err.toString()}));
+                .catch(err => callback({status: "error", message: err.toString()}));
                 """
                 
                 try:
-                    token_res = driver.execute_async_script(submit_js, creds['api_key'], request_code, hash_value)
+                    token_res = driver.execute_async_script(exchange_js, creds['api_key'], request_code, hash_value)
                     
                     if token_res["status"] == "success":
                         data = token_res["data"]
@@ -348,7 +342,7 @@ def auto_login(creds=None, headless=False, log_func=None):
             else:
                 log(f"⚠️ Python Exchange failed: {res.get('message')}")
                 
-            return {"status": "error", "message": f"Token generation failed. Try Manual Injection."}
+            return {"status": "error", "message": f"Token generation failed. Try Manual Injection or GitHub Action."}
         else:
             # CAPTURE SCREENSHOT ON ALL REDIRECT FAILURES
             try:
