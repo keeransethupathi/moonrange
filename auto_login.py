@@ -338,62 +338,65 @@ def auto_login(creds=None, headless=False, log_func=None):
             request_code = current_url.split('code=')[1].split('&')[0]
             log(f"Captured request_code: {request_code}")
             
-            # --- IN-BROWSER TOKEN EXCHANGE (Cloud Bypass) ---
-            log("Attempting In-Browser Token Exchange to bypass Cloud IP isolation...")
-            hash_payload = (creds['api_key'] + request_code + creds['api_secret']).encode()
-            hash_value = hashlib.sha256(hash_payload).hexdigest()
+            # --- TOKEN GENERATION ---
+            log("Generating final access token...")
             
-            exchange_js = """
-            var callback = arguments[arguments.length - 1];
-            var payload = {
-                "api_key": arguments[0],
-                "request_code": arguments[1],
-                "api_secret": arguments[2]
-            };
+            # 1. Try standard Python exchange first (Best for Local/Trusted IPs)
+            res = generate_access_token(request_code, api_key=creds['api_key'], api_secret=creds['api_secret'])
             
-            fetch("https://authapi.flattrade.in/trade/apitoken", {
-                method: "POST",
-                headers: { 
-                    "Content-Type": "application/json",
-                    "Accept": "application/json, text/plain, */*",
-                    "X-UserType": "USER",
-                    "X-SourceID": "WEB",
-                    "DNT": "1"
-                },
-                body: JSON.stringify(payload)
-            })
-            .then(async response => {
-                const text = await response.text();
-                let data;
-                try { data = JSON.parse(text); } catch(e) { data = { stat: "Not Ok", emsg: "Raw: " + text.substring(0, 100) }; }
-                callback({status: "success", data: data, statusCode: response.status});
-            })
-            .catch(err => callback({status: "error", message: err.toString()}));
-            """
+            if res.get("status") == "success":
+                log("✅ Python Token Exchange SUCCESSFUL!")
+                return {"status": "success", "code": request_code, "token": res["token"]}
             
-            try:
-                # IMPORTANT: We stay on the Current URL (where the redirect landed) 
-                # This ensures we don't trigger any "First-time visitor" IP blocks on authapi
-                log(f"Attempting API exchange directly from: {driver.current_url[:50]}...")
+            # 2. If it failed with INVALID_IP, try the In-Browser Bypass (Best for Cloud)
+            if "INVALID_IP" in str(res.get("message", "")):
+                log("⚠️ Python Exchange failed with INVALID_IP. Attempting In-Browser Bypass...")
                 
-                # Execute the fetch request inside the browser console
-                token_res = driver.execute_async_script(exchange_js, creds['api_key'], request_code, hash_value)
+                hash_payload = (creds['api_key'] + request_code + creds['api_secret']).encode()
+                hash_value = hashlib.sha256(hash_payload).hexdigest()
                 
-                if token_res["status"] == "success":
-                    data = token_res["data"]
-                    if data.get("stat") == "Ok":
-                        log("✅ In-Browser Token Exchange SUCCESSFUL!")
-                        return {"status": "success", "code": request_code, "token": data["token"]}
+                exchange_js = """
+                var callback = arguments[arguments.length - 1];
+                var payload = {
+                    "api_key": arguments[0],
+                    "request_code": arguments[1],
+                    "api_secret": arguments[2]
+                };
+                
+                fetch("https://authapi.flattrade.in/trade/apitoken", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(payload)
+                })
+                .then(async response => {
+                    const text = await response.text();
+                    let data;
+                    try { data = JSON.parse(text); } catch(e) { data = { stat: "Not Ok", emsg: "Raw: " + text.substring(0, 100) }; }
+                    callback({status: "success", data: data, statusCode: response.status});
+                })
+                .catch(err => callback({status: "error", message: err.toString()}));
+                """
+                
+                try:
+                    # Execute the fetch request inside the browser console
+                    token_res = driver.execute_async_script(exchange_js, creds['api_key'], request_code, hash_value)
+                    
+                    if token_res["status"] == "success":
+                        data = token_res["data"]
+                        if data.get("stat") == "Ok":
+                            log("✅ In-Browser Token Exchange SUCCESSFUL!")
+                            return {"status": "success", "code": request_code, "token": data["token"]}
+                        else:
+                            emsg = data.get('emsg', 'Unknown')
+                            log(f"⚠️ In-Browser API Error: {emsg}")
                     else:
-                        emsg = data.get('emsg', 'Unknown')
-                        log(f"⚠️ In-Browser API Error: {emsg}")
-                else:
-                    log(f"⚠️ In-Browser Script Error: {token_res.get('message', 'Unknown')}")
-            except Exception as e:
-                log(f"⚠️ In-Browser Exchange failed: {e}")
-
-            # Fallback for local environments: return the code and let Python try the exchange
-            return {"status": "success", "code": request_code}
+                        log(f"⚠️ In-Browser Script Error: {token_res.get('message', 'Unknown')}")
+                except Exception as e:
+                    log(f"⚠️ In-Browser Exchange failed: {e}")
+            else:
+                log(f"⚠️ Python Exchange failed: {res.get('message')}")
+                
+            return {"status": "error", "message": f"Token generation failed. Try Manual Injection."}
         else:
             # CAPTURE SCREENSHOT ON ALL REDIRECT FAILURES
             try:
