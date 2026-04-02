@@ -558,9 +558,11 @@ elif menu == "🔐 Login Portal": # Login Portal
                         st.write(f"✅ Captured request code: `{request_code[:10]}...`")
                         
                         st.write("Generating final access token...")
-                        token = generate_access_token(request_code)
+                        # Pass explicit API_KEY/SECRET to avoid credential mismatch
+                        res = generate_access_token(request_code, api_key=API_KEY, api_secret=API_SECRET)
                         
-                        if token:
+                        if res["status"] == "success":
+                            token = res["token"]
                             st.success("Access token generated successfully!")
                             st.code(token, language="text")
                             
@@ -570,7 +572,7 @@ elif menu == "🔐 Login Portal": # Login Portal
                             st.info("Token saved to `flattrade_auth.json`")
                             status.update(label="Login Successful!", state="complete")
                         else:
-                            st.error("Failed to generate access token from code.")
+                            st.error(f"Token Generation Failed: {res.get('message')}")
                             status.update(label="Token Generation Failed", state="error")
                     else:
                         st.error(f"Automation failed: {result.get('message')}")

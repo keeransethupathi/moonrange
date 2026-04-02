@@ -354,25 +354,28 @@ def auto_login(creds=None, headless=False, log_func=None):
         if driver:
             driver.quit()
 
-def generate_access_token(request_code):
-    # Try environment variables first
+def generate_access_token(request_code, api_key=None, api_secret=None):
+    # Use provided credentials or fallback to environment/file
     creds = {
-        'api_key': os.environ.get('FT_API_KEY'),
-        'api_secret': os.environ.get('FT_API_SECRET')
+        'api_key': api_key or os.environ.get('FT_API_KEY'),
+        'api_secret': api_secret or os.environ.get('FT_API_SECRET')
     }
     
+    # Secondary fallback to credentials.json if still missing
     if not all(creds.values()):
         if os.path.exists('credentials.json'):
             with open('credentials.json', 'r') as f:
                 file_creds = json.load(f)
                 creds['api_key'] = creds['api_key'] or file_creds.get('api_key')
                 creds['api_secret'] = creds['api_secret'] or file_creds.get('api_secret')
-        else:
-            print("Error: credentials.json not found for token generation.")
-            return None
+        
+    if not all(creds.values()):
+        return {"status": "error", "message": "Missing API Key or API Secret for token generation."}
 
     token_url = "https://authapi.flattrade.in/trade/apitoken"
-    hash_value = hashlib.sha256((creds['api_key'] + request_code + creds['api_secret']).encode()).hexdigest()
+    # Logic: SHA256(api_key + request_code + api_secret)
+    hash_payload = (creds['api_key'] + request_code + creds['api_secret']).encode()
+    hash_value = hashlib.sha256(hash_payload).hexdigest()
 
     payload = {
         "api_key": creds['api_key'],
@@ -380,26 +383,33 @@ def generate_access_token(request_code):
         "api_secret": hash_value
     }
 
-    response = requests.post(token_url, json=payload)
-    if response.status_code == 200:
-        data = response.json()
-        if data.get("stat") == "Ok":
-            return data["token"]
+    try:
+        response = requests.post(token_url, json=payload, timeout=10)
+        if response.status_code == 200:
+            data = response.json()
+            if data.get("stat") == "Ok":
+                return {"status": "success", "token": data["token"]}
+            else:
+                emsg = data.get('emsg', 'Unknown API Error')
+                print(f"Error from Flattrade API: {emsg}")
+                return {"status": "error", "message": emsg}
         else:
-            print(f"Error in token generation: {data.get('emsg')}")
-    return None
+            return {"status": "error", "message": f"HTTP {response.status_code}: {response.text[:100]}"}
+    except Exception as e:
+        return {"status": "error", "message": f"Network error during token generation: {str(e)}"}
 
 if __name__ == "__main__":
     result = auto_login()
     if result["status"] == "success":
         code = result["code"]
-        final_token = generate_access_token(code)
-        if final_token:
+        res = generate_access_token(code)
+        if res["status"] == "success":
+            final_token = res["token"]
             print(f"SUCCESS! Access Token: {final_token}")
             # Save token for other scripts
             with open('flattrade_auth.json', 'w') as f:
                 json.dump({"token": final_token}, f)
         else:
-            print("Failed to generate access token from code.")
+            print(f"Failed to generate access token: {res.get('message')}")
     else:
         print(f"Automation failed: {result.get('message')}")
