@@ -355,7 +355,10 @@ def auto_login(creds=None, headless=False, log_func=None):
                 method: "POST",
                 headers: { 
                     "Content-Type": "application/json",
-                    "Accept": "application/json, text/plain, */*"
+                    "Accept": "application/json, text/plain, */*",
+                    "X-UserType": "USER",
+                    "X-SourceID": "WEB",
+                    "DNT": "1"
                 },
                 body: JSON.stringify(payload)
             })
@@ -369,11 +372,9 @@ def auto_login(creds=None, headless=False, log_func=None):
             """
             
             try:
-                # Use current page but check if we can navigate to flattrade domain to avoid CORS
-                if "flattrade.in" not in driver.current_url:
-                    log("Navigating to authapi.flattrade.in to avoid CORS/Origin blocks...")
-                    driver.get("https://authapi.flattrade.in/trade/apitoken") # This usually returns 405/404 but sets origin
-                    time.sleep(1)
+                # IMPORTANT: We stay on the Current URL (where the redirect landed) 
+                # This ensures we don't trigger any "First-time visitor" IP blocks on authapi
+                log(f"Attempting API exchange directly from: {driver.current_url[:50]}...")
                 
                 # Execute the fetch request inside the browser console
                 token_res = driver.execute_async_script(exchange_js, creds['api_key'], request_code, hash_value)
@@ -386,7 +387,6 @@ def auto_login(creds=None, headless=False, log_func=None):
                     else:
                         emsg = data.get('emsg', 'Unknown')
                         log(f"⚠️ In-Browser API Error: {emsg}")
-                        # If the browser says INVALID_IP, we are in trouble, but let's see.
                 else:
                     log(f"⚠️ In-Browser Script Error: {token_res.get('message', 'Unknown')}")
             except Exception as e:
