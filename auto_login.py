@@ -291,54 +291,60 @@ def auto_login(creds=None, headless=False, log_func=None):
             
             # 2. If it failed with INVALID_IP, try the In-Browser Bypass (Best for Cloud)
             if "INVALID_IP" in str(res.get("message", "")):
-                log("⚠️ Python Exchange failed with INVALID_IP. Attempting 'Origin-Trusted' Bypass...")
+                log("⚠️ Python Exchange failed with INVALID_IP. Attempting 'Hammer' Form-POST Bypass...")
                 
                 hash_payload = (creds['api_key'] + request_code + creds['api_secret']).encode()
                 hash_value = hashlib.sha256(hash_payload).hexdigest()
                 
-                # IMPORTANT: We MUST be on a Flattrade domain to avoid CORS 'Failed to fetch' errors
-                if "flattrade.in" not in driver.current_url:
-                    log("Navigating to Flattrade origin to satisfy CORS requirements...")
-                    driver.get(f"https://auth.flattrade.in/?app_key={creds['api_key']}")
-                    time.sleep(2)
+                # We use a standard HTML form submission to bypass CORS entirely
+                # This triggers a top-level navigation, which is NOT subject to CORS blocks.
+                submit_js = """
+                var form = document.createElement('form');
+                form.method = 'POST';
+                form.action = 'https://authapi.flattrade.in/trade/apitoken';
                 
-                exchange_js = """
-                var callback = arguments[arguments.length - 1];
-                var payload = {
+                var fields = {
                     "api_key": arguments[0],
                     "request_code": arguments[1],
                     "api_secret": arguments[2]
                 };
                 
-                fetch("https://authapi.flattrade.in/trade/apitoken", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    credentials: "include", 
-                    body: JSON.stringify(payload)
-                })
-                .then(async response => {
-                    const text = await response.text();
-                    let data;
-                    try { data = JSON.parse(text); } catch(e) { data = { stat: "Not Ok", emsg: "Raw: " + text.substring(0, 100) }; }
-                    callback({status: "success", data: data});
-                })
-                .catch(err => callback({status: "error", message: err.toString()}));
+                for (var key in fields) {
+                    var input = document.createElement('input');
+                    input.type = 'hidden';
+                    input.name = key;
+                    input.value = fields[key];
+                    form.appendChild(input);
+                }
+                
+                document.body.appendChild(form);
+                form.submit();
                 """
                 
                 try:
-                    token_res = driver.execute_async_script(exchange_js, creds['api_key'], request_code, hash_value)
+                    # 1. Trigger the form submission
+                    driver.execute_script(submit_js, creds['api_key'], request_code, hash_value)
+                    log("Form submitted. Waiting for JSON response page...")
                     
-                    if token_res["status"] == "success":
-                        data = token_res["data"]
+                    # 2. Wait for the browser to load the result page (usually just plain text/json)
+                    time.sleep(3)
+                    
+                    # 3. Capture the JSON from the page source
+                    page_text = driver.page_source
+                    # Extract JSON from <pre> or just raw text
+                    if "{" in page_text:
+                        json_str = page_text[page_text.find("{"):page_text.rfind("}")+1]
+                        data = json.loads(json_str)
+                        
                         if data.get("stat") == "Ok":
-                            log("✅ In-Browser Bypass SUCCESSFUL!")
+                            log("✅ 'Hammer' Bypass SUCCESSFUL!")
                             return {"status": "success", "code": request_code, "token": data["token"]}
                         else:
-                            log(f"⚠️ Bypass API Error: {data.get('emsg', 'Unknown')}")
+                            log(f"⚠️ 'Hammer' API Error: {data.get('emsg', 'Unknown')}")
                     else:
-                        log(f"⚠️ Bypass Script Error: {token_res.get('message', 'Unknown')}")
+                        log("⚠️ 'Hammer' Bypass failed: No JSON found in response page.")
                 except Exception as e:
-                    log(f"⚠️ In-Browser Bypass failed: {e}")
+                    log(f"⚠️ 'Hammer' Bypass failed: {e}")
             else:
                 log(f"⚠️ Python Exchange failed: {res.get('message')}")
                 
