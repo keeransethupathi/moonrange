@@ -117,12 +117,26 @@ def auto_login(creds=None, headless=False, log_func=None):
             except:
                 pass
 
-            if os.path.exists('/usr/bin/chromium'):
-                log("Detected Streamlit Cloud environment. Forcing Chromium path for UC.")
-                chrome_options.binary_location = '/usr/bin/chromium'
-                driver = uc.Chrome(options=chrome_options, browser_executable_path='/usr/bin/chromium', use_subprocess=True)
+            linux_chrome_path = None
+            if os.name != 'nt':
+                # Common paths for Chrome/Chromium on Linux runners
+                potential_paths = [
+                    '/usr/bin/google-chrome-stable',
+                    '/usr/bin/google-chrome',
+                    '/usr/bin/chromium',
+                    '/usr/bin/chromium-browser'
+                ]
+                for p in potential_paths:
+                    if os.path.exists(p):
+                        linux_chrome_path = p
+                        log(f"Detected Linux Chrome at: {linux_chrome_path}")
+                        break
+            
+            if linux_chrome_path:
+                chrome_options.binary_location = linux_chrome_path
+                driver = uc.Chrome(options=chrome_options, browser_executable_path=linux_chrome_path, use_subprocess=True)
             else:
-                # Use detected version to avoid "session not created" errors
+                # Fallback for Windows or default search
                 driver = uc.Chrome(options=chrome_options, use_subprocess=True, version_main=version_main)
         except Exception as e:
             log(f"Undetected ChromeDriver setup failed: {e}")
