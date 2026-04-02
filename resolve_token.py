@@ -49,6 +49,12 @@ def resolve():
             "api_secret": hash_value
         }
         
+        # Diagnostic: Show IP to verify we are on a residential network
+        try:
+            ip_resp = requests.get('https://api.ipify.org', timeout=5)
+            print(f"DIAGNOSTIC: Local Outbound IP: {ip_resp.text}")
+        except: pass
+
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
             "Accept": "application/json, text/plain, */*",
@@ -57,7 +63,10 @@ def resolve():
             "Referer": "https://auth.flattrade.in/",
         }
         
-        response = requests.post(url, json=payload, headers=headers, timeout=10)
+        session = requests.Session()
+        session.headers.update(headers)
+        
+        response = session.post(url, json=payload, timeout=10)
         data = response.json()
         
         if data.get("stat") == "Ok":
