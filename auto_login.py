@@ -11,6 +11,13 @@ import time
 import json
 import pyotp
 import os
+import socket
+import urllib3.util.connection as urllib3_cn
+
+# Force IPv4 for the requests library to prevent Flattrade from receiving IPv6 connections and throwing INVALID_IP
+def allowed_gai_family():
+    return socket.AF_INET
+urllib3_cn.allowed_gai_family = allowed_gai_family
 
 def auto_login(creds=None, headless=False, log_func=None):
     def log(msg):

@@ -164,7 +164,7 @@ def display_dashboard_fragment(token_id, exchange_type, exchange_mapping):
     if latest_strend == 0.0 and strend:
         latest_strend = strend[-1]['value']
     
-    col1.metric("Price", f"₹{ltp:,.2f}")
+    col1.metric("Price", f"₹{ltp:,.2f}", delta=f"{ltp-latest_ema:,.2f} vs EMA")
     col2.metric("EMA (200)", f"₹{latest_ema:,.2f}")
     col3.metric("Supertrend", f"₹{latest_strend:,.2f}")
     
@@ -284,9 +284,75 @@ if 'dashboard_range' not in st.session_state:
 
 # Automation Strategy State
 if 'trading_phase' not in st.session_state:
-    st.session_state.trading_phase = 'BUY' # Starts with BUY
+    st.session_state.trading_phase = 'WAIT_FOR_DIP' # Starts by waiting for EMA dip
 if 'last_order_price' not in st.session_state:
     st.session_state.last_order_price = 0.0
+
+# ================= GLOBAL AUTOMATION ENGINE =================
+@st.fragment(run_every="1s")
+def headless_automation_engine():
+    if not st.session_state.get('auto_trading_active', False):
+        return
+        
+    try:
+        from order import place_flattrade_order
+        DATA_FILE = "market_data.json"
+        if os.path.exists(DATA_FILE):
+            with open(DATA_FILE, "r") as f:
+                data = json.load(f)
+            
+            ltp = data.get("ltp", 0.0)
+            ema_data = data.get("ema", [])
+            ema_val = data.get("live_ema", ema_data[-1].get("value", 0.0) if ema_data else 0.0)
+            
+            current_phase = st.session_state.trading_phase
+            tsym = st.session_state.get('trade_tsym')
+            qty = st.session_state.get('trade_qty', 0)
+            exch = st.session_state.get('trade_exch')
+            
+            if tsym and qty > 0 and exch and ltp > 0 and ema_val > 0:
+                current_trend = 1 if ltp > ema_val else -1
+                
+                # Recover from any newly corrupted states
+                if current_phase not in ['WAIT_FOR_DIP', 'BUY', 'SELL']:
+                    current_phase = 'WAIT_FOR_DIP'
+                    st.session_state.trading_phase = 'WAIT_FOR_DIP'
+
+                if current_phase == 'WAIT_FOR_DIP':
+                    if current_trend == -1:
+                        st.session_state.trading_logs.append(f"[{datetime.now().strftime('%H:%M:%S')}] 📉 Price below EMA. Strategy ARMED for BUY.")
+                        st.session_state.trading_phase = 'BUY'
+                
+                elif current_phase == 'BUY' and current_trend == 1:
+                    res = place_flattrade_order(tsym, qty, exch, 'B')
+                    if res.get('stat') == 'Ok':
+                        st.session_state.trading_logs.append(f"[{datetime.now().strftime('%H:%M:%S')}] ✅ AUTO BUY: {tsym} @ Limit Price. (Crossed above EMA)")
+                        st.session_state.trading_phase = 'SELL'
+                        st.session_state.last_order_side = f"BUY @ {ltp}"
+                    else:
+                        st.session_state.trading_logs.append(f"[{datetime.now().strftime('%H:%M:%S')}] ❌ BUY FAILED: {res.get('emsg')}")
+                        st.session_state.trading_phase = 'WAIT_FOR_DIP'
+                        st.session_state.auto_trading_active = False 
+                        
+                elif current_phase == 'SELL' and current_trend == -1:
+                    res = place_flattrade_order(tsym, qty, exch, 'S')
+                    if res.get('stat') == 'Ok':
+                        st.session_state.trading_logs.append(f"[{datetime.now().strftime('%H:%M:%S')}] ✅ AUTO SELL: {tsym} @ Limit Price. (Crossed below EMA)")
+                        st.session_state.trading_phase = 'WAIT_FOR_DIP'
+                        st.session_state.last_order_side = f"SELL @ {ltp}"
+                    else:
+                        st.session_state.trading_logs.append(f"[{datetime.now().strftime('%H:%M:%S')}] ❌ SELL FAILED: {res.get('emsg')}")
+                        st.session_state.trading_phase = 'WAIT_FOR_DIP'
+                        st.session_state.auto_trading_active = False 
+    except Exception as e:
+        # Don't silently fail; push to the logs so the user sees it
+        st.session_state.trading_logs.append(f"⚠️ Global Engine Error {str(e)}")
+        pass
+
+    # Ensures Streamlit frontend registers the fragment for polling
+    st.empty()
+
+headless_automation_engine()
 
 # Silence ScriptRunContext and other warnings
 logging.getLogger("streamlit.runtime.scriptrunner").setLevel(logging.ERROR)
@@ -298,7 +364,7 @@ st.title("🛡️ AngelOne Intelligence Hub")
 # Sidebar Menu for Navigation
 with st.sidebar:
     st.header(" NAVIGATION")
-    menu = st.radio("Go to", ["📊 Dashboard", "🔐 Login Portal", "📈 Flattrade Login", "📦 Order Portal", "📦 Scrip Master"])
+    menu = st.radio("Go to", ["📊 Dashboard", "🔐 Login Portal", "📦 Order Portal", "📦 Scrip Master"])
     st.divider()
 
 if menu == "📊 Dashboard":
@@ -453,7 +519,7 @@ elif menu == "🔐 Login Portal": # Login Portal
                 except Exception as e:
                     st.error(f"Error: {e}")
 
-elif menu == "📈 Flattrade Login": # Flattrade Login
+    st.divider()
     st.header("📈 Flattrade Login")
     
     API_KEY = safe_get_secret("FT_API_KEY", "b5768d873c474155a3d09d56a50f5314")
@@ -598,87 +664,32 @@ elif menu == "📈 Flattrade Login": # Flattrade Login
 
 elif menu == "📦 Order Portal": # Order Portal
     st.header("📦 Flattrade Auto-Order Hub")
-    # ---------------- AUTOMATION ENGINE ----------------
+    # ---------------- AUTOMATION UI ----------------
     @st.fragment(run_every="1s")
-    def automation_monitor():
-        # 1. Strategy Logic & Data Refresh
+    def automation_monitor_ui():
         ltp = 0.0
         data_available = False
-        
         try:
             DATA_FILE = "market_data.json"
             if os.path.exists(DATA_FILE):
                 with open(DATA_FILE, "r") as f:
                     data = json.load(f)
-                
                 ltp = data.get("ltp", 0.0)
                 strend_data = data.get("supertrend", [])
-                
-                # Fetch live indicators if available dynamically
-                if "live_strend" in data and data["live_strend"] != 0.0:
-                    strend_val = data["live_strend"]
-                    strend_trend = data["live_trend"]
-                else:
-                    strend_val = strend_data[-1].get("value", 0.0) if strend_data else 0.0
-                    strend_trend = strend_data[-1].get("trend", 0) if strend_data else 0
-                    
+                strend_val = data.get("live_strend", strend_data[-1].get("value", 0.0) if strend_data else 0.0)
+                strend_trend = data.get("live_trend", strend_data[-1].get("trend", 0) if strend_data else 0)
                 ema_data = data.get("ema", [])
-                if "live_ema" in data and data["live_ema"] != 0.0:
-                    ema_val = data["live_ema"]
-                else:
-                    ema_val = ema_data[-1].get("value", 0.0) if ema_data else 0.0
-                    
+                ema_val = data.get("live_ema", ema_data[-1].get("value", 0.0) if ema_data else 0.0)
                 data_available = True
-                
-                # 2. Strategy Logic: EMA Crossover
-                if st.session_state.auto_trading_active:
-                    current_phase = st.session_state.trading_phase
-                    tsym = st.session_state.get('trade_tsym')
-                    qty = st.session_state.get('trade_qty', 0)
-                    exch = st.session_state.get('trade_exch')
-                    
-                    if tsym and qty > 0 and exch:
-                        current_trend = 1 if ltp > ema_val else -1
-
-                        # STATE 1: WAIT FOR DIP (Price must go into Downtrend first)
-                        if current_phase == 'WAIT_FOR_DIP':
-                            if current_trend == -1:
-                                st.session_state.trading_logs.append(f"[{datetime.now().strftime('%H:%M:%S')}] 📉 Price below EMA. Strategy ARMED for BUY.")
-                                st.session_state.trading_phase = 'BUY'
-                                st.rerun()
-                        
-                        # STATE 2: BUY (Armed, waiting for Uptrend)
-                        elif current_phase == 'BUY' and current_trend == 1:
-                            res = place_flattrade_order(tsym, qty, exch, 'B')
-                            if res.get('stat') == 'Ok':
-                                st.session_state.trading_logs.append(f"[{datetime.now().strftime('%H:%M:%S')}] ✅ AUTO BUY: {tsym} @ {ltp} (Crossed above EMA)")
-                                st.session_state.trading_phase = 'SELL'
-                                st.session_state.last_order_side = f"BUY @ {ltp}"
-                                st.rerun()
-                            else:
-                                st.session_state.trading_logs.append(f"[{datetime.now().strftime('%H:%M:%S')}] ❌ BUY FAILED: {res.get('emsg')}")
-                        
-                        # STATE 3: SELL (Bought, waiting for Downtrend)
-                        elif current_phase == 'SELL' and current_trend == -1:
-                            res = place_flattrade_order(tsym, qty, exch, 'S')
-                            if res.get('stat') == 'Ok':
-                                st.session_state.trading_logs.append(f"[{datetime.now().strftime('%H:%M:%S')}] ✅ AUTO SELL: {tsym} @ {ltp} (Crossed below EMA)")
-                                st.session_state.trading_phase = 'WAIT_FOR_DIP' # RESET to wait for next cycle
-                                st.session_state.last_order_side = f"SELL @ {ltp}"
-                                st.rerun()
-                            else:
-                                st.session_state.trading_logs.append(f"[{datetime.now().strftime('%H:%M:%S')}] ❌ SELL FAILED: {res.get('emsg')}")
-                    else:
-                        if not tsym: st.session_state.trading_logs.append(f"⚠️ Strategy warning: tsym missing.")
-        except Exception as e:
-            st.session_state.trading_logs.append(f"⚠️ Monitor Error: {e}")
+        except:
+             pass
 
         # 3. UI Display (Market Feed & Logs)
         col_m1, col_m2 = st.columns([1, 1])
         with col_m1:
             st.subheader("Live Market Feed")
             if data_available:
-                st.metric("LTP", f"{ltp:.2f}", delta=f"{ltp-strend_val:.2f} (vs Supertrend)")
+                st.metric("LTP", f"{ltp:.2f}", delta=f"{ltp-ema_val:.2f} (vs EMA)")
                 st.write(f"**EMA (200):** {ema_val:.2f}")
                 st.write(f"**Supertrend:** {strend_val:.2f} ({'🟢 UP' if strend_trend == 1 else '🔴 DOWN'})")
             else:
@@ -781,7 +792,7 @@ elif menu == "📦 Order Portal": # Order Portal
 
     with col2:
         # Combined Monitor Fragment Call
-        automation_monitor()
+        automation_monitor_ui()
         
         if st.button("🗑️ Clear Logs"):
             st.session_state.trading_logs = []
@@ -790,6 +801,38 @@ elif menu == "📦 Order Portal": # Order Portal
 
 elif menu == "📦 Scrip Master":
     st.header("📦 Scrip Master")
+    
+    @st.fragment
+    def flattrade_balance_fragment():
+        if st.button("💰 Show Flattrade Balance", use_container_width=True):
+            with st.spinner("Fetching Balance..."):
+                try:
+                    with open('flattrade_auth.json', 'r') as f:
+                        token = json.load(f).get('token')
+                    uid = os.environ.get('FT_USERNAME')
+                    if not uid and os.path.exists('credentials.json'):
+                        with open('credentials.json', 'r') as f:
+                            uid = json.load(f).get('username')
+                    
+                    if token and uid:
+                        url = "https://piconnect.flattrade.in/PiConnectAPI/Limits"
+                        payload = 'jData=' + json.dumps({"uid": uid, "actid": uid}) + '&jKey=' + token
+                        res = requests.post(url, data=payload).json()
+                        if res.get('stat') == 'Ok':
+                            cash = float(res.get('cash', 0.0))
+                            payin = float(res.get('payin', 0.0))
+                            margin = float(res.get('marginused', 0.0))
+                            total = cash + payin - margin
+                            st.success(f"**Available Trading Margin:** ₹{total:,.2f}")
+                        else:
+                            st.error(f"Failed to fetch balance: {res.get('emsg')}")
+                    else:
+                        st.warning("Flattrade credentials missing. Please log in first.")
+                except Exception as e:
+                    st.error(f"Error fetching balance: {e}")
+                    
+    flattrade_balance_fragment()
+    st.divider()
     
     # Live Indices Banner
     st.subheader("🌕 Live Market Indices")

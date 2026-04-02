@@ -10,7 +10,10 @@ def place_flattrade_order(tsym, qty, exch, trantype):
     exch: Exchange
     trantype: 'B' for Buy, 'S' for Sell
     """
-    url = "https://piconnect.flattrade.in/PiConnectTP/PlaceOrder"
+    base_url = "https://piconnect.flattrade.in/PiConnectAPI"
+    order_url = f"{base_url}/PlaceOrder"
+    search_url = f"{base_url}/SearchScrip"
+    quote_url = f"{base_url}/GetQuotes"
 
     # Load jkey and credentials
     try:
@@ -18,33 +21,70 @@ def place_flattrade_order(tsym, qty, exch, trantype):
             auth_data = json.load(f)
             jkey = auth_data.get('token')
             if not jkey:
-                return {"stat": "Not Ok", "emsg": "Token not found in flattrade_auth.json"}
+                return {"stat": "Not Ok", "emsg": "Token not found"}
         
-        # Try environment variable first
         uid = os.environ.get('FT_USERNAME')
-        
         if not uid:
-            # Fallback to credentials.json
             if os.path.exists('credentials.json'):
                 with open('credentials.json', 'r') as f:
-                    creds = json.load(f)
-                    uid = creds.get('username')
+                    uid = json.load(f).get('username')
             
         if not uid:
-            return {"stat": "Not Ok", "emsg": "User ID (FT_USERNAME) not found in environment or credentials.json"}
+            return {"stat": "Not Ok", "emsg": "User ID not found"}
     except Exception as e:
         return {"stat": "Not Ok", "emsg": f"Auth error: {str(e)}"}
+
+    headers = {"Content-Type": "application/x-www-form-urlencoded"}
+
+    # 1. Flattrade API V2 rejects MKT (Market) orders.
+    # We must use LMT (Limit). To simulate Market, we fetch the LTP and add a buffer.
+    try:
+        # Search for Token
+        search_payload = 'jData=' + json.dumps({"uid": uid, "exch": exch, "stext": tsym}) + '&jKey=' + jkey
+        s_res = requests.post(search_url, data=search_payload, headers=headers).json()
+        
+        if s_res.get("stat") != "Ok" or not s_res.get("values"):
+            return {"stat": "Not Ok", "emsg": f"Symbol '{tsym}' not found or expired!"}
+            
+        # Get exact token
+        token = s_res["values"][0]["token"]
+        for item in s_res["values"]:
+            if item.get("tsym") == tsym:
+                token = item["token"]
+                break
+                
+        # Get Option LTP
+        quote_payload = 'jData=' + json.dumps({"uid": uid, "exch": exch, "token": token}) + '&jKey=' + jkey
+        q_res = requests.post(quote_url, data=quote_payload, headers=headers).json()
+        if q_res.get("stat") != "Ok":
+            return {"stat": "Not Ok", "emsg": f"Failed to get price for {tsym}"}
+            
+        ltp = float(q_res.get("lp", 0))
+        if ltp <= 0:
+            return {"stat": "Not Ok", "emsg": f"Invalid Price for {tsym}"}
+            
+        # Simulate Market Order using Limit with 3% buffer
+        if trantype == 'B':
+            limit_price = ltp * 1.03
+        else:
+            limit_price = max(0.05, ltp * 0.97)
+            
+        # Tick size rounding (Nearest 0.05)
+        limit_price = round(limit_price / 0.05) * 0.05
+        
+    except Exception as e:
+        return {"stat": "Not Ok", "emsg": f"Price sync error: {e}"}
 
     order_data = {
         "uid": uid,
         "actid": uid,
         "exch": exch,
         "tsym": tsym,
-        "qty": str(qty),       # NorenAPI requires all parameters to be strings
-        "prd": "M",            # Margin/Intraday
-        "trantype": trantype,  # 'B' or 'S'
-        "prctyp": "MKT",       # Market
-        "prc": "0",
+        "qty": str(qty),
+        "prd": "M",
+        "trantype": trantype,
+        "prctyp": "LMT",
+        "prc": f"{limit_price:.2f}",
         "blprc": "0",
         "ret": "DAY",
         "amo": "NO",
@@ -52,17 +92,11 @@ def place_flattrade_order(tsym, qty, exch, trantype):
         "remarks": "OrderPortal"
     }
 
-    # Construct the body as a raw string exactly as expected by many NorenAPI implementations
     jdata_compact = json.dumps(order_data, separators=(",", ":"))
     body = f"jData={jdata_compact}&jKey={jkey}"
 
-    headers = {
-        "Content-Type": "application/x-www-form-urlencoded"
-    }
-
     try:
-        # Some NorenAPI servers prefer the body string directly without further URL encoding by requests
-        response = requests.post(url, data=body, headers=headers)
+        response = requests.post(order_url, data=body, headers=headers)
         if response.status_code == 200:
             return response.json()
         else:
@@ -74,8 +108,4 @@ def place_flattrade_order(tsym, qty, exch, trantype):
         return {"stat": "Not Ok", "emsg": str(e)}
 
 if __name__ == "__main__":
-    # Test order
     print("Testing order placement...")
-    # res = place_flattrade_order("NIFTY24FEB26C26000", "65", "NFO", "S")
-    # print(res)
-
