@@ -20,3 +20,5 @@ firebase_export.json
 flattrade_indices.json
 flattrade_indices.pid
 stop_indices.txt
+
+chrome_profile/

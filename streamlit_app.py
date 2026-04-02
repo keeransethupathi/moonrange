@@ -472,9 +472,9 @@ elif menu == "🔐 Login Portal": # Login Portal
     c1, c2, c3 = st.columns([1, 2, 1])
     with c2:
         with st.form("login_form"):
-            default_c_code = existing_auth.get("client_code") or safe_get_secret("ANGEL_CLIENT_CODE", "K135836")
-            default_api_k = existing_auth.get("api_key") or safe_get_secret("ANGEL_API_KEY", "t0bsCNdW")
-            default_totp_s = safe_get_secret("ANGEL_TOTP_SECRET", "YGDC6I7VDV7KJSIELCN626FKBY")
+            default_c_code = safe_get_secret("ANGEL_CLIENT_CODE", existing_auth.get("client_code", "K135836"))
+            default_api_k = safe_get_secret("ANGEL_API_KEY", existing_auth.get("api_key", "t0bsCNdW"))
+            default_totp_s = safe_get_secret("ANGEL_TOTP_SECRET", existing_auth.get("totp_secret", "YGDC6I7VDV7KJSIELCN626FKBY"))
 
             c_code = st.text_input("Client Code", value=default_c_code)
             pwd = st.text_input("Password", type="password", value="1997")
