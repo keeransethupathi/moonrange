@@ -85,10 +85,11 @@ def auto_login(creds=None, headless=False, log_func=None):
         os.makedirs(user_data_dir, exist_ok=True)
     chrome_options.add_argument(f"--user-data-dir={user_data_dir}")
     
-    # Bypassing CORS and Site Isolation (Nuclear Option)
-    chrome_options.add_argument("--disable-web-security")
-    chrome_options.add_argument("--disable-site-isolation-trials")
-    
+    # Standard undetected_chromedriver stealth
+    chrome_options.add_argument("--disable-blink-features=AutomationControlled")
+    # Let UC handle the User-Agent dynamically for better stealth
+    chrome_options.add_argument("--disable-features=IsolateOrigins,site-per-process")
+
     if headless:
         chrome_options.add_argument("--headless")
         chrome_options.add_argument("--window-size=1920,1080")
@@ -99,11 +100,6 @@ def auto_login(creds=None, headless=False, log_func=None):
         chrome_options.add_argument("--shm-size=2gb")
         chrome_options.add_argument("--remote-debugging-port=9222")
         chrome_options.add_argument("--address-family=ipv4")
-    
-    # Aggressive stealth arguments
-    chrome_options.add_argument("--disable-blink-features=AutomationControlled")
-    chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36")
-    chrome_options.add_argument("--disable-features=IsolateOrigins,site-per-process")
         
     driver = None
     try:
@@ -152,131 +148,57 @@ def auto_login(creds=None, headless=False, log_func=None):
 
         # Helper for resilient input
         def send_keys_resilient(xpath_list, value, label):
-            if not value:
-                log(f"Error: No value provided for {label}")
-                return False
+            if not value: return False
             for xpath in xpath_list:
                 for attempt in range(3):
                     try:
                         element = wait.until(EC.presence_of_element_located((By.XPATH, xpath)))
                         wait.until(EC.element_to_be_clickable((By.XPATH, xpath)))
-                        
-                        # Human-like interaction: Click -> Clear -> Type Char-by-char -> Blur
                         element.click()
-                        time.sleep(0.5)
+                        time.sleep(0.2)
                         element.clear()
-                        
                         for char in value:
                             element.send_keys(char)
-                            time.sleep(0.1) # Human-like typing speed
-                        
-                        # Force update via JavaScript and events (Crucial for Vue/React)
-                        driver.execute_script("""
-                            var el = arguments[0];
-                            el.dispatchEvent(new Event('input', { bubbles: true }));
-                            el.dispatchEvent(new Event('change', { bubbles: true }));
-                            el.dispatchEvent(new Event('blur', { bubbles: true }));
-                        """, element)
-                        
-                        # Verify the value stuck
-                        current_val = element.get_attribute('value')
-                        if current_val == value:
-                            log(f"Entered and verified {label} using {xpath}")
-                            time.sleep(1) # Wait for framework to process input
+                        driver.execute_script("arguments[0].dispatchEvent(new Event('input', { bubbles: true }));", element)
+                        if element.get_attribute('value') == value:
+                            log(f"Entered {label}")
                             return True
-                        else:
-                            log(f"Value verification failed for {label}: expected {value}, got {current_val}")
                     except Exception as ex:
-                        log(f"Attempt {attempt+1} fail for {label} ({xpath}): {ex}")
-                        time.sleep(1)
+                        log(f"Attempt {attempt+1} fail for {label}: {ex}")
+                        time.sleep(0.5)
             return False
 
-        # Wait for and fill username
+        # Fill credentials
         wait = WebDriverWait(driver, 15)
-        
-        # Possible User ID selectors
-        user_xpaths = ["//input[@placeholder='User ID']", "//input[@placeholder='Username']", "//input[@name='user_id']"]
-        if not send_keys_resilient(user_xpaths, creds['username'], "username"):
+        if not send_keys_resilient(["//input[@placeholder='User ID']", "//input[@name='user_id']"], creds['username'], "username"):
             return {"status": "error", "message": "Failed to find username input"}
-
-        # Fill password
-        pass_xpaths = ["//input[@placeholder='Password']", "//input[@name='password']"]
-        if not send_keys_resilient(pass_xpaths, creds['password'], "password"):
+        if not send_keys_resilient(["//input[@placeholder='Password']", "//input[@name='password']"], creds['password'], "password"):
             return {"status": "error", "message": "Failed to find password input"}
 
-        # Generate TOTP JUST-IN-TIME
-        totp = pyotp.TOTP(creds['totp_key'])
-        token = totp.now()
-        log(f"Generated fresh TOTP: {token}")
-
-        # Fill TOTP
-        totp_xpaths = ["//input[@placeholder='OTP / TOTP']", "//input[@placeholder='TOTP']", "//input[@name='otp']"]
-        if not send_keys_resilient(totp_xpaths, token, "TOTP"):
+        # Fill fresh TOTP
+        token = pyotp.TOTP(creds['totp_key']).now()
+        if not send_keys_resilient(["//input[@placeholder='OTP / TOTP']", "//input[@name='otp']"], token, "TOTP"):
             return {"status": "error", "message": "Failed to find TOTP input"}
         
-        # Try ENTER key first
-        try:
-            totp_input = driver.switch_to.active_element
-            totp_input.send_keys(Keys.ENTER)
-            log("Submitted via ENTER key on TOTP field")
-        except:
-            pass
-
-        time.sleep(1) 
-
+        log("Proceeding to click Login...")
+        time.sleep(1)
 
         try:
-            # Multi-layer Click Strategy
-            clicked = False
+            # Direct JS Click is often most reliable for modern SPAs (Vuetify)
+            login_btn_xpath = "//button[.//span[contains(text(), 'Log In')]] | //button[contains(., 'Log In')] | //button[contains(., 'Login')]"
+            login_btn = wait.until(EC.element_to_be_clickable((By.XPATH, login_btn_xpath)))
+            driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", login_btn)
+            time.sleep(0.5)
             
-            # Find the button first to check its state
-            try:
-                login_btn = driver.find_element(By.XPATH, "//button[.//span[contains(text(), 'Log In')]] | //button[contains(., 'Log In')]")
-                log(f"Login button found. Enabled: {login_btn.is_enabled()}")
-                
-                # 1. Primary approach: Native ActionChains Double-Click
-                driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", login_btn)
-                time.sleep(0.5)
-                ActionChains(driver).move_to_element(login_btn).pause(0.2).click().pause(0.1).click().perform()
-                log("Clicked login button via ActionChains (Rapid-fire Double)")
-                clicked = True
-            except Exception as e:
-                log(f"ActionChains click failed: {e}")
-                
-            if not clicked:
-                # 2. Try JavaScript with PointerEvents and Force Submit
-                script = """
-                var buttons = document.querySelectorAll('button');
-                for (var i = 0; i < buttons.length; i++) {
-                    var text = buttons[i].textContent.toLowerCase();
-                    if (text.includes('log in') || text.includes('submit')) {
-                        var btn = buttons[i];
-                        btn.disabled = false;
-                        btn.classList.remove('v-btn--disabled');
-                        
-                        // Human-like events
-                        btn.dispatchEvent(new PointerEvent('pointerover', {bubbles: true}));
-                        btn.dispatchEvent(new PointerEvent('pointerdown', {bubbles: true}));
-                        btn.dispatchEvent(new PointerEvent('pointerup', {bubbles: true}));
-                        btn.click();
-                        
-                        // Immediate form submission if still on page
-                        var form = btn.closest('form');
-                        if (form) {
-                            if (typeof form.requestSubmit === 'function') {
-                                form.requestSubmit();
-                            } else {
-                                form.submit();
-                            }
-                        }
-                        return true;
-                    }
-                }
-                return false;
-                """
-                clicked = driver.execute_script(script)
-                if clicked:
-                    log("Clicked login button via JS (PointerEvents + Submit Fallback)")
+            # Click via JS and PointerEvents to ensure a clean interaction
+            js_login_script = """
+            var btn = arguments[0];
+            btn.dispatchEvent(new PointerEvent('pointerdown', {bubbles: true}));
+            btn.dispatchEvent(new PointerEvent('pointerup', {bubbles: true}));
+            btn.click();
+            """
+            driver.execute_script(js_login_script, login_btn)
+            log("Clicked login button via Direct JS Click / PointerEvents")
         except Exception as e:
             log(f"Login click failed: {e}")
 
