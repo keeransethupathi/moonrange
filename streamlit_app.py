@@ -573,12 +573,20 @@ elif menu == "🔐 Login Portal": # Login Portal
                         request_code = result["code"]
                         st.write(f"✅ Captured request code: `{request_code[:10]}...`")
                         
-                        st.write("Generating final access token...")
-                        # Pass explicit API_KEY/SECRET to avoid credential mismatch
-                        res = generate_access_token(request_code, api_key=API_KEY, api_secret=API_SECRET)
+                        # Check if token was already generated in-browser (Cloud/IP Bypass)
+                        token = result.get("token")
                         
-                        if res["status"] == "success":
-                            token = res["token"]
+                        if not token:
+                            st.write("Generating final access token...")
+                            # Fallback for local environments: Pass explicit API_KEY/SECRET
+                            res = generate_access_token(request_code, api_key=API_KEY, api_secret=API_SECRET)
+                            if res["status"] == "success":
+                                token = res["token"]
+                            else:
+                                st.error(f"Token Generation Failed: {res.get('message')}")
+                                status.update(label="Token Generation Failed", state="error")
+                        
+                        if token:
                             st.success("Access token generated successfully!")
                             st.code(token, language="text")
                             

@@ -337,6 +337,52 @@ def auto_login(creds=None, headless=False, log_func=None):
         if 'code=' in current_url:
             request_code = current_url.split('code=')[1].split('&')[0]
             log(f"Captured request_code: {request_code}")
+            
+            # --- IN-BROWSER TOKEN EXCHANGE (Cloud Bypass) ---
+            log("Attempting In-Browser Token Exchange to bypass Cloud IP isolation...")
+            hash_payload = (creds['api_key'] + request_code + creds['api_secret']).encode()
+            hash_value = hashlib.sha256(hash_payload).hexdigest()
+            
+            exchange_js = """
+            var callback = arguments[arguments.length - 1];
+            var payload = {
+                "api_key": arguments[0],
+                "request_code": arguments[1],
+                "api_secret": arguments[2]
+            };
+            
+            fetch("https://authapi.flattrade.in/trade/apitoken", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload)
+            })
+            .then(response => response.json())
+            .then(data => callback({status: "success", data: data}))
+            .catch(err => callback({status: "error", message: err.message}));
+            """
+            
+            try:
+                # Navigate to the target API domain first to satisfy Same-Origin policy
+                # This prevents the browser from blocking the cross-origin POST request
+                driver.get("https://authapi.flattrade.in/")
+                time.sleep(1)
+                
+                # Execute the fetch request inside the browser console
+                token_res = driver.execute_async_script(exchange_js, creds['api_key'], request_code, hash_value)
+                
+                if token_res["status"] == "success":
+                    data = token_res["data"]
+                    if data.get("stat") == "Ok":
+                        log("✅ In-Browser Token Exchange SUCCESSFUL!")
+                        return {"status": "success", "code": request_code, "token": data["token"]}
+                    else:
+                        log(f"⚠️ In-Browser API Error: {data.get('emsg', 'Unknown')}")
+                else:
+                    log(f"⚠️ In-Browser Script Error: {token_res.get('message', 'Unknown')}")
+            except Exception as e:
+                log(f"⚠️ In-Browser Exchange failed: {e}")
+
+            # Fallback for local environments: return the code and let Python try the exchange
             return {"status": "success", "code": request_code}
         else:
             # CAPTURE SCREENSHOT ON ALL REDIRECT FAILURES
