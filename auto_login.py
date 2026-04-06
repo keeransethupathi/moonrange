@@ -101,22 +101,30 @@ def auto_login(creds=None, headless=False, log_func=None):
             'password': os.environ.get('FT_PASSWORD'),
             'totp_key': os.environ.get('FT_TOTP_KEY'),
             'api_key': os.environ.get('FT_API_KEY'),
-            'api_secret': os.environ.get('FT_API_SECRET')
+            'api_secret': os.environ.get('FT_API_SECRET'),
+            'proxy_host': os.environ.get('FT_PROXY_HOST'),
+            'proxy_port': os.environ.get('FT_PROXY_PORT', '1080'),
+            'proxy_user': os.environ.get('FT_PROXY_USER'),
+            'proxy_pass': os.environ.get('FT_PROXY_PASS'),
+            'use_proxy': os.environ.get('FT_USE_PROXY', 'false').lower() == 'true'
         }
         
-        # Check if all required keys are found in environment
-        if not all(creds.values()):
-            print("Some credentials missing in environment, checking credentials.json...")
+        # Check if login credentials are found in environment
+        if not all([creds['username'], creds['password'], creds['totp_key'], creds['api_key'], creds['api_secret']]):
+            print("Login credentials missing in environment, checking credentials.json...")
             if os.path.exists('credentials.json'):
                 with open('credentials.json', 'r') as f:
                     file_creds = json.load(f)
                     # Use file values for only missing ones
                     for key in creds:
-                        if not creds[key]:
-                            creds[key] = file_creds.get(key)
+                        if key in file_creds and not (isinstance(creds[key], str) and creds[key]):
+                            if key == 'use_proxy':
+                                creds[key] = str(file_creds.get(key, 'false')).lower() == 'true'
+                            else:
+                                creds[key] = file_creds.get(key)
             else:
-                print("Error: credentials.json not found and environment variables missing.")
-                return {"status": "error", "message": "Missing credentials"}
+                print("Error: credentials.json not found and essential environment variables missing.")
+                return {"status": "error", "message": "Missing essential credentials"}
 
     # Generate TOTP
     if not creds.get('totp_key'):
