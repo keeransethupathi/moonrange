@@ -34,6 +34,27 @@ class UnifiedBackend:
         self.final_upperband_list = []
         self.final_lowerband_list = []
         self.st_trend_list = []
+        self.proxies = None
+        self.load_proxies()
+
+    def load_proxies(self):
+        try:
+            if os.path.exists(CREDS_FILE):
+                with open(CREDS_FILE, "r") as f:
+                    creds = json.load(f)
+                    if creds.get('use_proxy') and creds.get('proxy_host'):
+                        p_host = creds.get('proxy_host')
+                        p_port = creds.get('proxy_port', '1080')
+                        p_user = creds.get('proxy_user', '')
+                        p_pass = creds.get('proxy_pass', '')
+                        if p_user and p_pass:
+                            p_url = f"socks5h://{p_user}:{p_pass}@{p_host}:{p_port}"
+                        else:
+                            p_url = f"socks5h://{p_host}:{p_port}"
+                        self.proxies = {"http": p_url, "https": p_url}
+                        print(f"Proxy configured for UnifiedBackend: {p_host}")
+        except Exception as e:
+            print(f"Error loading proxies: {e}")
 
     def check_singleton(self):
         if os.path.exists(PID_FILE):
@@ -156,7 +177,7 @@ class UnifiedBackend:
                 # 1. Global Indices Polling
                 for exch, tok, name in [("NSE", "26000", "NIFTY 50"), ("BSE", "1", "SENSEX")]:
                     payload = 'jData=' + json.dumps({"uid": self.uid, "exch": exch, "token": tok}) + '&jKey=' + self.jkey
-                    res = requests.post(URL, data=payload, timeout=5).json()
+                    res = requests.post(URL, data=payload, proxies=self.proxies, timeout=5).json()
                     if res.get('stat') == 'Ok':
                         lp, c = float(res.get('lp', 0)), float(res.get('c', 1))
                         indices_state[name] = {"lp": f"{lp:.2f}", "pc": f"{((lp-c)/c*100):.2f}"}
@@ -171,7 +192,7 @@ class UnifiedBackend:
                     
                     if tok and exch:
                         payload = 'jData=' + json.dumps({"uid": self.uid, "exch": exch, "token": tok}) + '&jKey=' + self.jkey
-                        res = requests.post(URL, data=payload, timeout=5).json()
+                        res = requests.post(URL, data=payload, proxies=self.proxies, timeout=5).json()
                         if res.get('stat') == 'Ok':
                             lp = float(res.get('lp', 0))
                             qty = int(res.get('v', 0)) # Using total volume as tick volume proxy

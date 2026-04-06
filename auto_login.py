@@ -25,10 +25,65 @@ try:
 except:
     pass
 
-def get_outbound_ip():
+def create_proxy_auth_extension(proxy_host, proxy_port, proxy_user, proxy_pass, scheme='socks5'):
+    """Creates a temporary Chrome extension to handle proxy authentication."""
+    import tempfile
+    import zipfile
+    
+    plugin_path = os.path.join(tempfile.gettempdir(), f'proxy_auth_plugin_{int(time.time())}.zip')
+    
+    manifest_json = """
+    {
+        "version": "1.0.0",
+        "manifest_version": 2,
+        "name": "Chrome Proxy",
+        "permissions": [
+            "proxy", "tabs", "unlimitedStorage", "storage", "<all_urls>", "webRequest", "webRequestBlocking"
+        ],
+        "background": {
+            "scripts": ["background.js"]
+        },
+        "minimum_chrome_version":"22.0.0"
+    }
+    """
+    
+    background_js = """
+    var config = {
+        mode: "fixed_servers",
+        rules: {
+            singleProxy: {
+                scheme: "%s",
+                host: "%s",
+                port: parseInt(%s)
+            },
+            bypassList: []
+        }
+    };
+    chrome.proxy.settings.set({value: config, scope: "regular"}, function() {});
+    function callbackFn(details) {
+        return {
+            authCredentials: {
+                username: "%s",
+                password: "%s"
+            }
+        };
+    }
+    chrome.webRequest.onAuthRequired.addListener(
+        callbackFn,
+        {urls: ["<all_urls>"]},
+        ['blocking']
+    );
+    """ % (scheme, proxy_host, proxy_port, proxy_user, proxy_pass)
+    
+    with zipfile.ZipFile(plugin_path, 'w') as zp:
+        zp.writestr("manifest.json", manifest_json)
+        zp.writestr("background.js", background_js)
+    return plugin_path
+
+def get_outbound_ip(proxies=None):
     """Diagnostic helper to see which IP Flattrade sees"""
     try:
-        return requests.get("https://api.ipify.org", timeout=5).text
+        return requests.get("https://api.ipify.org", proxies=proxies, timeout=5).text
     except:
         return "Unknown"
 
@@ -97,6 +152,34 @@ def auto_login(creds=None, headless=False, log_func=None):
         chrome_options.add_argument("--shm-size=2gb")
         chrome_options.add_argument("--remote-debugging-port=9222")
         chrome_options.add_argument("--address-family=ipv4")
+        
+    # Proxy Configuration
+    proxies = None
+    if creds.get('use_proxy') and creds.get('proxy_host'):
+        proxy_host = creds.get('proxy_host')
+        proxy_port = creds.get('proxy_port', '1080')
+        proxy_user = creds.get('proxy_user', '')
+        proxy_pass = creds.get('proxy_pass', '')
+        
+        log(f"Configuring SOCKS5 Proxy: {proxy_host}:{proxy_port}")
+        
+        if proxy_user and proxy_pass:
+            proxy_url = f"socks5h://{proxy_user}:{proxy_pass}@{proxy_host}:{proxy_port}"
+            # For Selenium with Auth, we use the extension bypass
+            ext_path = create_proxy_auth_extension(proxy_host, proxy_port, proxy_user, proxy_pass)
+            chrome_options.add_extension(ext_path)
+            # IMPORTANT: For UC to work with extensions, we might need to adjust some settings
+            # and --proxy-server argument might conflict with extension in some cases
+        else:
+            proxy_url = f"socks5h://{proxy_host}:{proxy_port}"
+            chrome_options.add_argument(f"--proxy-server=socks5://{proxy_host}:{proxy_port}")
+            
+        proxies = {"http": proxy_url, "https": proxy_url}
+        log(f"Requests proxy configured: {proxy_url.split('@')[-1] if '@' in proxy_url else proxy_url}")
+
+    # Diagnostic: Check IP before starting Selenium
+    current_ip = get_outbound_ip(proxies=proxies)
+    log(f"Outbound IP Detection: {current_ip}")
         
     driver = None
     try:
@@ -412,33 +495,46 @@ def auto_login(creds=None, headless=False, log_func=None):
 
 def generate_access_token(request_code, api_key=None, api_secret=None):
     # Use provided credentials or fallback to environment/file
-    creds = {
+    creds_to_use = {
         'api_key': api_key or os.environ.get('FT_API_KEY'),
         'api_secret': api_secret or os.environ.get('FT_API_SECRET')
     }
     
-    # Secondary fallback to credentials.json if still missing
-    if not all(creds.values()):
-        if os.path.exists('credentials.json'):
-            with open('credentials.json', 'r') as f:
-                file_creds = json.load(f)
-                creds['api_key'] = creds['api_key'] or file_creds.get('api_key')
-                creds['api_secret'] = creds['api_secret'] or file_creds.get('api_secret')
+    # Load full creds for proxy check
+    proxy_creds = {}
+    if os.path.exists('credentials.json'):
+        with open('credentials.json', 'r') as f:
+            proxy_creds = json.load(f)
+            creds_to_use['api_key'] = creds_to_use['api_key'] or proxy_creds.get('api_key')
+            creds_to_use['api_secret'] = creds_to_use['api_secret'] or proxy_creds.get('api_secret')
         
-    if not all(creds.values()):
+    if not all(creds_to_use.values()):
         return {"status": "error", "message": "Missing API Key or API Secret for token generation."}
+
+    # Proxy Configuration for Token Exchange
+    proxies = None
+    if proxy_creds.get('use_proxy') and proxy_creds.get('proxy_host'):
+        p_host = proxy_creds.get('proxy_host')
+        p_port = proxy_creds.get('proxy_port', '1080')
+        p_user = proxy_creds.get('proxy_user', '')
+        p_pass = proxy_creds.get('proxy_pass', '')
+        if p_user and p_pass:
+            p_url = f"socks5h://{p_user}:{p_pass}@{p_host}:{p_port}"
+        else:
+            p_url = f"socks5h://{p_host}:{p_port}"
+        proxies = {"http": p_url, "https": p_url}
 
     token_url = "https://authapi.flattrade.in/trade/apitoken"
     # Logic: SHA256(api_key + request_code + api_secret)
-    hash_payload = (creds['api_key'] + request_code + creds['api_secret']).encode()
+    hash_payload = (creds_to_use['api_key'] + request_code + creds_to_use['api_secret']).encode()
     hash_value = hashlib.sha256(hash_payload).hexdigest()
 
     # Diagnostic: Log IP
-    current_ip = get_outbound_ip()
+    current_ip = get_outbound_ip(proxies=proxies)
     print(f"DIAGNOSTIC: Token request outbound IP: {current_ip}")
 
     payload = {
-        "api_key": creds['api_key'],
+        "api_key": creds_to_use['api_key'],
         "request_code": request_code,
         "api_secret": hash_value
     }
@@ -452,7 +548,7 @@ def generate_access_token(request_code, api_key=None, api_secret=None):
     }
 
     try:
-        response = requests.post(token_url, json=payload, headers=headers, timeout=10)
+        response = requests.post(token_url, json=payload, headers=headers, proxies=proxies, timeout=10)
         if response.status_code == 200:
             data = response.json()
             if data.get("stat") == "Ok":

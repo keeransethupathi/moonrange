@@ -13,12 +13,12 @@ credentials.json
 scrip_master.json
 page_source.html
 *.png
-.streamlit/
+.streamlit/secrets.toml
+ssh-key-*.key
 firebase_key.json
 firebase_export.json
 .gemini/
 flattrade_indices.json
 flattrade_indices.pid
 stop_indices.txt
-
 chrome_profile/
