@@ -239,7 +239,9 @@ def auto_login(creds=None, headless=False, log_func=None):
                         except: pass
                         break
             
-            linux_chromedriver_path = '/usr/bin/chromedriver' if os.path.exists('/usr/bin/chromedriver') else None
+            linux_chromedriver_path = '/opt/moon_range/chromedriver'
+            if not os.path.exists(linux_chromedriver_path):
+                linux_chromedriver_path = '/usr/bin/chromedriver' if os.path.exists('/usr/bin/chromedriver') else None
             
             if linux_chrome_path:
                 chrome_options.binary_location = linux_chrome_path
