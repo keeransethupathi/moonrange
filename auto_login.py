@@ -239,9 +239,17 @@ def auto_login(creds=None, headless=False, log_func=None):
                         except: pass
                         break
             
+            linux_chromedriver_path = '/usr/bin/chromedriver' if os.path.exists('/usr/bin/chromedriver') else None
+            
             if linux_chrome_path:
                 chrome_options.binary_location = linux_chrome_path
-                driver = uc.Chrome(options=chrome_options, browser_executable_path=linux_chrome_path, use_subprocess=True, version_main=version_main)
+                driver = uc.Chrome(
+                    options=chrome_options, 
+                    browser_executable_path=linux_chrome_path, 
+                    driver_executable_path=linux_chromedriver_path,
+                    use_subprocess=True, 
+                    version_main=version_main
+                )
             else:
                 # Fallback for Windows or default search
                 driver = uc.Chrome(options=chrome_options, use_subprocess=True, version_main=version_main)
