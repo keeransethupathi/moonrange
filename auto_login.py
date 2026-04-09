@@ -87,6 +87,17 @@ def get_outbound_ip(proxies=None):
     except:
         return "Unknown"
 
+
+def safe_get_secret(key, default=None):
+    """Safely get a secret from streamlit secrets or environment variables."""
+    try:
+        import streamlit as st
+        if key in st.secrets:
+            return st.secrets[key]
+    except Exception:
+        pass
+    return os.environ.get(key, default)
+
 def auto_login(creds=None, headless=False, log_func=None):
     def log(msg):
         print(msg)
@@ -95,18 +106,18 @@ def auto_login(creds=None, headless=False, log_func=None):
 
     # Load credentials if not provided
     if creds is None:
-        # Try environment variables first
+        # Try secrets first (Cloud), then environment, then local file
         creds = {
-            'username': os.environ.get('FT_USERNAME'),
-            'password': os.environ.get('FT_PASSWORD'),
-            'totp_key': os.environ.get('FT_TOTP_KEY'),
-            'api_key': os.environ.get('FT_API_KEY'),
-            'api_secret': os.environ.get('FT_API_SECRET'),
-            'proxy_host': os.environ.get('FT_PROXY_HOST'),
-            'proxy_port': os.environ.get('FT_PROXY_PORT', '1080'),
-            'proxy_user': os.environ.get('FT_PROXY_USER'),
-            'proxy_pass': os.environ.get('FT_PROXY_PASS'),
-            'use_proxy': os.environ.get('FT_USE_PROXY', 'false').lower() == 'true'
+            'username': safe_get_secret('FT_USERNAME'),
+            'password': safe_get_secret('FT_PASSWORD'),
+            'totp_key': safe_get_secret('FT_TOTP_KEY'),
+            'api_key': safe_get_secret('FT_API_KEY'),
+            'api_secret': safe_get_secret('FT_API_SECRET'),
+            'proxy_host': safe_get_secret('FT_PROXY_HOST'),
+            'proxy_port': safe_get_secret('FT_PROXY_PORT', '1080'),
+            'proxy_user': safe_get_secret('FT_PROXY_USER'),
+            'proxy_pass': safe_get_secret('FT_PROXY_PASS'),
+            'use_proxy': str(safe_get_secret('FT_USE_PROXY', 'false')).lower() == 'true'
         }
         
         # Check if login credentials are found in environment
@@ -408,9 +419,11 @@ def auto_login(creds=None, headless=False, log_func=None):
                 
                 # Navigate to the API's own subdomain to make it a 'Same-Origin' request
                 # Same-origin requests bypass CORS completely!
-                api_subdomain = "https://authapi.flattrade.in/trade/login"
-                log(f"Navigating to {api_subdomain} to establish Same-Origin trust...")
-                driver.get(api_subdomain)
+                # Navigate to the API domain directly to establish trust for Same-Origin requests
+                # This bypasses CORS because the fetch will be same-domain.
+                api_trust_url = "https://authapi.flattrade.in/trade/apitoken"
+                log(f"Establishing Same-Origin trust via {api_trust_url}...")
+                driver.get(api_trust_url) # This may show a method not allowed error, which is fine
                 time.sleep(2)
                 
                 exchange_js = """
@@ -421,23 +434,30 @@ def auto_login(creds=None, headless=False, log_func=None):
                     "api_secret": arguments[2]
                 };
                 
-                // This is now a Same-Origin request. No CORS blocks!
+                console.log("Attempting Same-Origin Token Exchange...");
+                
                 fetch("/trade/apitoken", {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify(payload)
                 })
                 .then(async response => {
+                    const status = response.status;
                     const text = await response.text();
-                    let data;
+                    console.log("Response Status:", status);
+                    console.log("Response Text:", text);
+                    
                     try { 
-                        data = JSON.parse(text); 
+                        const data = JSON.parse(text); 
+                        callback({status: "success", data: data});
                     } catch(e) { 
-                        data = { stat: "Not Ok", emsg: "Raw: " + text.substring(0, 50) }; 
+                        callback({status: "error", message: "Failed to parse JSON: " + text.substring(0, 100)});
                     }
-                    callback({status: "success", data: data});
                 })
-                .catch(err => callback({status: "error", message: err.toString()}));
+                .catch(err => {
+                    console.error("Fetch Error:", err);
+                    callback({status: "error", message: err.toString()});
+                });
                 """
                 
                 try:
@@ -453,7 +473,7 @@ def auto_login(creds=None, headless=False, log_func=None):
                     else:
                         log(f"⚠️ Bypass Script Error: {token_res.get('message', 'Unknown')}")
                 except Exception as e:
-                    log(f"⚠️ Same-Origin Bypass failed: {e}")
+                    log(f"⚠️ Same-Origin Bypass failed during execution: {e}")
             else:
                 log(f"⚠️ Python Exchange failed: {res.get('message')}")
                 

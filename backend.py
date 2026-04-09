@@ -28,7 +28,10 @@ SUPERTREND_PERIOD = 10
 TOKEN_LIST = [{"exchangeType": exchange_type, "tokens": [token_id]}]
 CORRELATION_ID = f"backend_{token_id}"
 DATA_FILE = "market_data.json"
-STOP_FILE = "stop_backend.txt"
+STOP_FILE = "stop_indices.txt"
+PID_FILE = "backend_angelone.pid"
+
+
 
 # ================= STATE & LOGIC =================
 class MarketDataBackend:
@@ -108,6 +111,113 @@ class MarketDataBackend:
 
     def on_close(self, wsapp, code=None, msg=None):
         logger.warn(f"### [v2.0] WebSocket Closed: {code} - {msg} ###")
+
+    def load_history(self):
+        """Load previous OHLC bars from database and recalculate indicators"""
+        logger.info(f"### [v2.0] Loading historical data for {token_id} ###")
+        try:
+            self.db_cursor.execute("SELECT time, open, high, low, close, volume FROM ohlc WHERE token_id = ? ORDER BY time ASC LIMIT 1000", (str(token_id),))
+            rows = self.db_cursor.fetchall()
+            
+            with self.lock:
+                for row in rows:
+                    bar = {
+                        "time": row[0],
+                        "open": row[1],
+                        "high": row[2],
+                        "low": row[3],
+                        "close": row[4],
+                        "volume": row[5]
+                    }
+                    self.ohlc_bars.append(bar)
+                    self._recalculate_indicators_for_bar(bar)
+                
+                if self.ohlc_bars:
+                    self.latest_ltp = self.ohlc_bars[-1]["close"]
+                    logger.info(f"### [v2.0] Successfully loaded {len(self.ohlc_bars)} bars. Last Close: {self.latest_ltp} ###")
+                
+                self.save_data()
+        except Exception as e:
+            logger.error(f"Error loading history: {e}")
+            logger.error(traceback.format_exc())
+
+    def _recalculate_indicators_for_bar(self, bar):
+        """Helper to compute EMA and Supertrend for a loaded bar"""
+        chart_time = bar["time"]
+        current_close = bar["close"]
+        current_high = bar["high"]
+        current_low = bar["low"]
+
+        # EMA Calculation
+        if len(self.ema_bars) == 0:
+            self.ema_bars.append({"time": chart_time, "value": current_close})
+        else:
+            prev_ema = self.ema_bars[-1]["value"]
+            multiplier = 2 / (EMA_PERIOD + 1)
+            ema_val = (current_close - prev_ema) * multiplier + prev_ema
+            self.ema_bars.append({"time": chart_time, "value": ema_val})
+
+        # Supertrend Calculation
+        # True Range
+        if len(self.ohlc_bars) == 1:
+            tr = current_high - current_low
+        else:
+            prev_close = self.ohlc_bars[-2]["close"]
+            tr = max(current_high - current_low, abs(current_high - prev_close), abs(current_low - prev_close))
+        
+        if not hasattr(self, 'tr_list'): self.tr_list = []
+        self.tr_list.append(tr)
+        
+        # ATR (EMA of TR)
+        if not hasattr(self, 'atr_list'): self.atr_list = []
+        if len(self.atr_list) == 0:
+            self.atr_list.append(tr)
+        else:
+            prev_atr = self.atr_list[-1]
+            atr_multiplier = 2 / (SUPERTREND_PERIOD + 1)
+            current_atr = (tr - prev_atr) * atr_multiplier + prev_atr
+            self.atr_list.append(current_atr)
+
+        # Supertrend Bands
+        if len(self.ema_bars) > 0:
+            basis = self.ema_bars[-1]["value"]
+            current_atr_val = self.atr_list[-1]
+            ST_MULTIPLIER = 0.0 # Standard for this strategy
+            
+            basic_upperband = basis + (ST_MULTIPLIER * current_atr_val)
+            basic_lowerband = basis - (ST_MULTIPLIER * current_atr_val)
+            
+            if not hasattr(self, 'final_upperband_list'):
+                self.final_upperband_list = []
+                self.final_lowerband_list = []
+                self.st_trend_list = []
+            
+            if len(self.final_upperband_list) == 0:
+                self.final_upperband_list.append(basic_upperband)
+                self.final_lowerband_list.append(basic_lowerband)
+                self.st_trend_list.append(1)
+                self.supertrend_bars.append({"time": chart_time, "value": basic_lowerband, "trend": 1})
+            else:
+                prev_final_upperband = self.final_upperband_list[-1]
+                prev_final_lowerband = self.final_lowerband_list[-1]
+                prev_source = self.ema_bars[-2]["value"] if len(self.ema_bars) > 1 else basis
+                current_source = basis
+                prev_trend = self.st_trend_list[-1]
+                
+                final_upperband = basic_upperband if (basic_upperband < prev_final_upperband or prev_source > prev_final_upperband) else prev_final_upperband
+                final_lowerband = basic_lowerband if (basic_lowerband > prev_final_lowerband or prev_source < prev_final_lowerband) else prev_final_lowerband
+                
+                trend = prev_trend
+                if prev_trend == 1 and current_source < final_lowerband: trend = -1
+                elif prev_trend == -1 and current_source > final_upperband: trend = 1
+                
+                self.final_upperband_list.append(final_upperband)
+                self.final_lowerband_list.append(final_lowerband)
+                self.st_trend_list.append(trend)
+                
+                st_value = final_lowerband if trend == 1 else final_upperband
+                self.supertrend_bars.append({"time": chart_time, "value": st_value, "trend": trend})
+
 
     def add_tick(self, ltp, qty, ts):
         with self.lock:
@@ -358,9 +468,33 @@ class MarketDataBackend:
         except Exception as e:
             logger.error(f"Data save error: {e}")
 
+    def check_singleton(self):
+        """Ensure only one instance of this backend is running"""
+        import psutil
+        if os.path.exists(PID_FILE):
+            try:
+                with open(PID_FILE, "r") as f:
+                    old_pid = int(f.read().strip())
+                if psutil.pid_exists(old_pid):
+                    proc = psutil.Process(old_pid)
+                    if "python" in proc.name().lower():
+                        logger.warn(f"### Backend already running with PID {old_pid} ###")
+                        return False
+            except Exception as e:
+                logger.error(f"Singleton check error: {e}")
+        
+        with open(PID_FILE, "w") as f:
+            f.write(str(os.getpid()))
+        return True
+
     def run(self):
         logger.info("### [v2.0] Starting Backend System ###")
+        
+        if not self.check_singleton():
+            return
+
         if os.path.exists(STOP_FILE):
+
             os.remove(STOP_FILE)
             
         try:
@@ -370,7 +504,11 @@ class MarketDataBackend:
             # Using raw token as in original working script
             token = auth["Authorization"]
             
+            # Load History from DB first
+            self.load_history()
+            
             self.sws = SmartWebSocketV2(token, auth["api_key"], auth["client_code"], auth["feedtoken"])
+
             self.sws.on_open = self.on_open
             self.sws.on_data = self.on_data
             self.sws.on_error = self.on_error

@@ -20,5 +20,8 @@ firebase_export.json
 .gemini/
 flattrade_indices.json
 flattrade_indices.pid
+backend_angelone.pid
+market_data.db
+backend_debug.log
 stop_indices.txt
 chrome_profile/

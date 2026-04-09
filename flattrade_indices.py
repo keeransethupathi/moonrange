@@ -39,6 +39,24 @@ class UnifiedBackend:
 
     def load_proxies(self):
         try:
+            # Try secrets first (Cloud)
+            try:
+                import streamlit as st
+                if 'FT_PROXY_HOST' in st.secrets and str(st.secrets.get('FT_USE_PROXY', 'false')).lower() == 'true':
+                    p_host = st.secrets['FT_PROXY_HOST']
+                    p_port = st.secrets.get('FT_PROXY_PORT', '1080')
+                    p_user = st.secrets.get('FT_PROXY_USER', '')
+                    p_pass = st.secrets.get('FT_PROXY_PASS', '')
+                    if p_user and p_pass:
+                        p_url = f"socks5h://{p_user}:{p_pass}@{p_host}:{p_port}"
+                    else:
+                        p_url = f"socks5h://{p_host}:{p_port}"
+                    self.proxies = {"http": p_url, "https": p_url}
+                    print(f"Proxy configured for UnifiedBackend via Secrets: {p_host}")
+                    return
+            except: pass
+
+            # Fallback to local files
             if os.path.exists(CREDS_FILE):
                 with open(CREDS_FILE, "r") as f:
                     creds = json.load(f)
@@ -52,7 +70,7 @@ class UnifiedBackend:
                         else:
                             p_url = f"socks5h://{p_host}:{p_port}"
                         self.proxies = {"http": p_url, "https": p_url}
-                        print(f"Proxy configured for UnifiedBackend: {p_host}")
+                        print(f"Proxy configured for UnifiedBackend via File: {p_host}")
         except Exception as e:
             print(f"Error loading proxies: {e}")
 

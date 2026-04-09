@@ -12,12 +12,16 @@ import subprocess
 import traceback
 import logging
 import re
+import streamlit.components.v1 as components
+import psutil
 from datetime import datetime
 from SmartApi.smartWebSocketV2 import SmartWebSocketV2
 from custom_tv_chart import renderCustomLightweightCharts
 from order import place_flattrade_order
 
 # ================= STREAMLIT CONFIG =================
+
+
 st.set_page_config(layout="wide", page_title="AngelOne Intelligence Hub")
 
 STOP_FILE = "stop_indices.txt"
@@ -31,6 +35,46 @@ def safe_get_secret(key, default=None):
         pass
     return os.environ.get(key, default)
 
+
+def kill_process_by_pid(pid_file):
+    """Attempt to kill a process given its PID file."""
+    if os.path.exists(pid_file):
+        try:
+            with open(pid_file, "r") as f:
+                pid = int(f.read().strip())
+            if psutil.pid_exists(pid):
+                proc = psutil.Process(pid)
+                proc.terminate()
+                try:
+                    proc.wait(timeout=3)
+                except psutil.TimeoutExpired:
+                    proc.kill()
+            os.remove(pid_file)
+            return True
+        except Exception as e:
+            print(f"Error killing process {pid_file}: {e}")
+    return False
+
+
+
+
+
+def launch_angelone_backend(exch, token, range_val, force=True):
+    """Launch the original AngelOne backend.py"""
+    try:
+        if not os.path.exists("auth.json"):
+            return False, "AngelOne login required."
+            
+        cmd = [sys.executable, "backend.py", str(exch), str(token), str(range_val)]
+        if sys.platform == "win32":
+            subprocess.Popen(cmd, creationflags=subprocess.CREATE_NEW_CONSOLE)
+        else:
+            subprocess.Popen(cmd, start_new_session=True)
+        return True, "AngelOne Backend Launching..."
+    except Exception as e:
+        return False, f"Launch error: {e}"
+
+
 def fetch_live_indices():
     file_path = "flattrade_indices.json"
     if os.path.exists(file_path):
@@ -43,34 +87,21 @@ def fetch_live_indices():
             pass
     return {"NIFTY 50": {"lp": "N/A", "pc": "0.00"}, "SENSEX": {"lp": "N/A", "pc": "0.00"}}
 
-def launch_indices_backend(force=False):
-    if not force and os.path.exists(STOP_FILE):
-        return # Respect manual stop
 
-    file_path = "flattrade_indices.json"
-    last_update = 0
-    if os.path.exists(file_path):
-        try:
-            with open(file_path, "r") as f:
-                last_update = json.load(f).get("last_update", 0)
-        except:
-            pass
-    
-    if force or (time.time() - last_update > 60):
-        try:
-            # Check if auth exists (file or secret)
-            has_auth = os.path.exists("flattrade_auth.json") or safe_get_secret("FT_TOKEN")
-            if has_auth:
-                cmd = [sys.executable, "flattrade_indices.py"]
-                if sys.platform == "win32":
-                    subprocess.Popen(cmd, creationflags=subprocess.CREATE_NEW_CONSOLE)
-                else:
-                    # Linux (Streamlit Cloud)
-                    subprocess.Popen(cmd, start_new_session=True)
-                return True
-        except Exception as e:
-            print(f"Launch error: {e}")
-    return False
+def launch_indices_backend(force=False):
+    """Launch the background indices collector."""
+    try:
+        if force or not os.path.exists("flattrade_indices.pid"):
+            cmd = [sys.executable, "flattrade_indices.py"]
+            if sys.platform == "win32":
+                subprocess.Popen(cmd, creationflags=subprocess.CREATE_NEW_CONSOLE)
+            else:
+                subprocess.Popen(cmd, start_new_session=True)
+            return True, "Indices Backend Launching..."
+        return False, "Indices Backend Already Running."
+    except Exception as e:
+        return False, f"Launch error: {e}"
+
 
 @st.fragment(run_every="1s")
 def indices_banner_fragment():
@@ -106,6 +137,8 @@ def indices_banner_fragment():
                 st.metric(label, price, delta=change)
     except Exception as e:
         st.error(f"Error loading live indices: {e}")
+
+
 
 @st.fragment(run_every="1s")
 def display_dashboard_fragment(token_id, exchange_type, exchange_mapping):
@@ -272,21 +305,17 @@ if 'selected_instrument' not in st.session_state:
 if 'selected_strike' not in st.session_state:
     st.session_state.selected_strike = None
 if 'dashboard_token' not in st.session_state:
-    st.session_state.dashboard_token = "864149"
+    st.session_state.dashboard_token = "486503"
 if 'dashboard_exchange' not in st.session_state:
-    st.session_state.dashboard_exchange = "BFO"
+    st.session_state.dashboard_exchange = "MCX"
 if 'trade_tsym_input' not in st.session_state:
     st.session_state.trade_tsym_input = "NIFTY24FEB26C26000"
 if 'trade_exch_input' not in st.session_state:
     st.session_state.trade_exch_input = "NFO"
 if 'dashboard_range' not in st.session_state:
     st.session_state.dashboard_range = 0.05
-
-# Automation Strategy State
-if 'trading_phase' not in st.session_state:
-    st.session_state.trading_phase = 'WAIT_FOR_DIP' # Starts by waiting for EMA dip
-if 'last_order_price' not in st.session_state:
-    st.session_state.last_order_price = 0.0
+if 'resolver_code' not in st.session_state:
+    st.session_state.resolver_code = ""
 
 # ================= GLOBAL AUTOMATION ENGINE =================
 @st.fragment(run_every="1s")
@@ -354,6 +383,9 @@ def headless_automation_engine():
 
 headless_automation_engine()
 
+
+
+
 # Silence ScriptRunContext and other warnings
 logging.getLogger("streamlit.runtime.scriptrunner").setLevel(logging.ERROR)
 logging.getLogger("smartWebSocketV2").setLevel(logging.ERROR)
@@ -365,11 +397,18 @@ st.title("🛡️ AngelOne Intelligence Hub")
 with st.sidebar:
     st.header(" NAVIGATION")
     menu = st.radio("Go to", ["📊 Dashboard", "🔐 Login Portal", "📦 Order Portal", "📦 Scrip Master"])
+
+
     st.divider()
 
 if menu == "📊 Dashboard":
     with st.sidebar:
         st.header("Systems Control")
+        
+
+
+
+
         
         # Selection UI
         exchange_mapping = {"NSE": 1, "NFO": 2, "MCX": 5, "BSE": 3, "CDS": 13, "BFO": 4}
@@ -389,28 +428,22 @@ if menu == "📊 Dashboard":
         st.divider()
         
         if not st.session_state.backend_running:
-            if st.button("🚀 Start Unified Backend", type="primary", use_container_width=True):
-                if not os.path.exists("flattrade_auth.json"):
-                    st.error("Authentication file `flattrade_auth.json` not found. Please login via 'Login Portal' first.")
+            if st.button("🚀 Start AngelOne Backend", type="primary", use_container_width=True):
+                # AngelOne Backend
+                if not os.path.exists("auth.json"):
+                    st.error("AngelOne login required. Go to 'Login Portal'.")
                 else:
-                    # START UNIFIED BACKEND via flattrade_indices.py
-                    # 1. Ensure config exists
-                    if not os.path.exists("dashboard_config.json"):
-                        with open("dashboard_config.json", "w") as f:
-                           json.dump({
-                               "token": st.session_state.dashboard_token,
-                               "exch": st.session_state.dashboard_exchange,
-                               "range": st.session_state.get('dashboard_range', 0.05)
-                           }, f)
-                    
-                    # 2. Launch (it handles its own singleton status)
-                    launch_indices_backend(force=True)
-                    st.session_state.backend_running = True
-                    st.success("Unified Backend Launching...")
-                    time.sleep(1)
-                    st.rerun()
+                    success, msg = launch_angelone_backend(exchange_type, token_id, range_val)
+                    if success:
+                        st.success(msg)
+                        st.session_state.backend_running = True
+                        time.sleep(1)
+                        st.rerun()
+                    else:
+                        st.error(msg)
         else:
-            if st.button("🛑 Stop Unified Backend", use_container_width=True):
+            if st.button("🛑 Stop Backend", use_container_width=True):
+
                 with open(STOP_FILE, "w") as f:
                     f.write("stop")
                 st.session_state.backend_running = False
@@ -426,14 +459,52 @@ if menu == "📊 Dashboard":
                 st.session_state.last_error = None
                 st.rerun()
         
-        if st.button("🗑️ Reset Data"):
-            st.session_state.ohlc_data = []
-            st.session_state.ema_data = []
-            st.session_state.supertrend_data = []
-            st.session_state.live_ema = 0.0
-            st.session_state.live_strend = 0.0
-            st.session_state.current_ltp = 0.0
-            st.rerun()
+        if st.button("🗑️ Reset Data", use_container_width=True):
+            with st.status("Resetting system... please wait.") as status:
+                st.write("🛑 Stopping backend processes...")
+                # 1. Stop Signal
+                with open(STOP_FILE, "w") as f:
+                    f.write("stop")
+                
+                # 2. Hard kill if they don't stop gracefully
+                time.sleep(1)
+                kill_process_by_pid("backend_angelone.pid")
+                kill_process_by_pid("flattrade_indices.pid")
+                
+                st.write("🧹 Clearing data files...")
+                # 3. Clear Persistent Data
+                targets = ["market_data.json", "market_data.db", "flattrade_indices.json", "backend_debug.log"]
+                for f_path in targets:
+                    if os.path.exists(f_path):
+                        for _ in range(3):
+                            try:
+                                os.remove(f_path)
+                                break
+                            except:
+                                time.sleep(0.5)
+                
+                # 4. Clear screenshot logs
+                if os.path.exists("logs"):
+                    for f in os.listdir("logs"):
+                        if f.endswith(".png"):
+                            try: os.remove(os.path.join("logs", f))
+                            except: pass
+
+                # 5. Clear State
+                st.session_state.ohlc_data = []
+                st.session_state.ema_data = []
+                st.session_state.supertrend_data = []
+                st.session_state.live_ema = 0.0
+                st.session_state.live_strend = 0.0
+                st.session_state.current_ltp = 0.0
+                st.session_state.trading_logs = []
+                st.session_state.last_error = None
+                st.session_state.backend_running = False
+                
+                status.update(label="System Reset Complete!", state="complete")
+                time.sleep(1)
+                st.rerun()
+
 
     # Call Fragment for Live Updates
     display_dashboard_fragment(token_id, exchange_type, exchange_mapping)
@@ -443,7 +514,8 @@ elif menu == "🔐 Login Portal": # Login Portal
     try:
         from auto_login import get_outbound_ip
         current_ip = get_outbound_ip()
-        st.caption(f"🌐 Outbound IP (Diagnostic): `{current_ip}`")
+        st.info(f"🌐 **Current Outbound IP:** `{current_ip}`")
+        st.caption("Ensure this IP is whitelisted in your Flattrade API Portal.")
     except:
         pass
         
@@ -458,6 +530,7 @@ elif menu == "🔐 Login Portal": # Login Portal
     with c2:
         with st.form("login_form"):
             default_c_code = safe_get_secret("ANGEL_CLIENT_CODE", existing_auth.get("client_code", "K135836"))
+            # Use previously provided API key as default
             default_api_k = safe_get_secret("ANGEL_API_KEY", existing_auth.get("api_key", "t0bsCNdW"))
             default_totp_s = safe_get_secret("ANGEL_TOTP_SECRET", existing_auth.get("totp_secret", "YGDC6I7VDV7KJSIELCN626FKBY"))
 
@@ -515,408 +588,196 @@ elif menu == "🔐 Login Portal": # Login Portal
     # Automated Login Section
     st.subheader("🤖 Automated Login")
     
-    # Cloud Detection Warning
     is_cloud = "STREAMLIT_RUNTIME_ENV" in os.environ or os.environ.get("HOSTNAME") == "streamlit"
     if is_cloud:
-        st.error("⚠️ **Cloud Restriction**: Flattrade blocks automated login from data-center IPs (Streamlit Cloud). Use the **Universal Cloud Connector** below instead.")
+        st.error("⚠️ **Cloud Restriction**: Flattrade blocks automated login from data-center IPs. Use the **Universal Cloud Connector** below instead.")
     else:
         st.info("Click the button below to automatically login and generate your access token.")
     
     if st.button("🚀 Run Auto Login", type="secondary" if is_cloud else "primary", use_container_width=True):
         try:
             from auto_login import auto_login, generate_access_token
-            
             with st.status("Running automated login...") as status:
                 log_placeholder = st.empty()
                 logs = []
-                
                 def ui_logger(msg):
                     logs.append(msg)
                     with log_placeholder.container():
-                        for m in logs[-5:]: # Show last 5 lines for focus
-                            st.write(f"› {m}")
+                        for m in logs[-5:]: st.write(f"› {m}")
 
-                # Try loading from secrets/env first via auto_login's internal logic
-                # or check if credentials.json exists as fallback
-                has_secrets = safe_get_secret('FT_USERNAME') is not None
-                if not os.path.exists('credentials.json') and not has_secrets:
-                    st.error("No credentials found. Please set FT environment variables / secrets or provide `credentials.json`.")
-                else:
-                    # Explicitly build creds to pass to auto_login to ensure cloud compatibility
-                    login_creds = {
-                        'username': safe_get_secret('FT_USERNAME'),
-                        'password': safe_get_secret('FT_PASSWORD'),
-                        'totp_key': safe_get_secret('FT_TOTP_KEY'),
-                        'api_key': API_KEY,
-                        'api_secret': API_SECRET
-                    }
-                    result = auto_login(creds=login_creds, headless=True, log_func=ui_logger)
+                login_creds = {
+                    'username': safe_get_secret('FT_USERNAME'),
+                    'password': safe_get_secret('FT_PASSWORD'),
+                    'totp_key': safe_get_secret('FT_TOTP_KEY'),
+                    'api_key': API_KEY, 'api_secret': API_SECRET
+                }
+                result = auto_login(creds=login_creds, headless=True, log_func=ui_logger)
+                if result["status"] == "success":
+                    request_code = result["code"]
+                    st.session_state.resolver_code = request_code # Handover for resolver
+                    token = result.get("token")
+                    if not token:
+                        res = generate_access_token(request_code, api_key=API_KEY, api_secret=API_SECRET)
+                        token = res.get("token") if res["status"] == "success" else None
                     
-                    if result["status"] == "success":
-                        request_code = result["code"]
-                        st.write(f"✅ Captured request code: `{request_code[:10]}...`")
-                        
-                        # Check if token was already generated in-browser (Cloud/IP Bypass)
-                        token = result.get("token")
-                        
-                        if not token:
-                            st.write("Generating final access token...")
-                            # Fallback for local environments: Pass explicit API_KEY/SECRET
-                            res = generate_access_token(request_code, api_key=API_KEY, api_secret=API_SECRET)
-                            if res["status"] == "success":
-                                token = res["token"]
-                            else:
-                                st.error(f"Token Generation Failed: {res.get('message')}")
-                                status.update(label="Token Generation Failed", state="error")
-                        
-                        if token:
-                            st.success("Access token generated successfully!")
-                            st.code(token, language="text")
-                            
-                            flat_auth = {"api_key": API_KEY, "token": token}
-                            with open("flattrade_auth.json", "w") as f:
-                                json.dump(flat_auth, f, indent=4)
-                            st.info("Token saved to `flattrade_auth.json`")
-                            status.update(label="Login Successful!", state="complete")
-                        else:
-                            st.error(f"Token Generation Failed: {res.get('message')}")
-                            with st.expander("Full Activity Log (Diagnostics)"):
-                                for log in logs:
-                                    st.write(f"› {log}")
-                            status.update(label="Token Generation Failed", state="error")
+                    if token:
+                        st.success("Access token generated successfully!")
+                        flat_auth = {"api_key": API_KEY, "token": token}
+                        with open("flattrade_auth.json", "w") as f:
+                            json.dump(flat_auth, f, indent=4)
+                        status.update(label="Login Successful!", state="complete")
                     else:
-                        st.error(f"Automation failed: {result.get('message')}")
-                        status.update(label="Automation Failed", state="error")
-        except Exception as e:
-            st.error(f"An unexpected error occurred: {e}")
-            st.exception(e)
-
-    # Universal Cloud Connector (Recommended for Cloud Users)
-    st.subheader("☁️ Universal Cloud Connector (Resident IP Bypass)")
-    with st.expander("Final Solution: Use `resolve_token.py` if Auto-Login/Browser fails!", expanded=True):
-        st.markdown("""
-        If you get `INVALID_IP` or `Failed to fetch`, use the **Local Resolver** on your own PC:
-        1. **Sync**: Ensure you have latest code on your PC (`git pull`).
-        2. **Run**: Open a terminal in your project folder and run:
-           ```bash
-           python resolve_token.py
-           ```
-        3. **Resolve**: Paste the Google URL into the terminal. It will generate your token using your **Home IP**.
-        4. **Automatic**: It automatically saves to `flattrade_auth.json` and connects your account!
-        """)
-        
-        st.link_button("Step 1: Open Flattrade Login 🔗", AUTH_URL, use_container_width=True)
-        
-        # Browser-side HTML/JS Helper for same-origin fetch (CORS Immune on User's Resident IP)
-        cloud_helper_html = f"""
-        <div style="background: #1e1e1e; padding: 15px; border-radius: 8px; border: 1px solid #444; color: white; font-family: sans-serif;">
-            <p style="margin-top: 0; color: #aaa; font-size: 0.9em;">Step 2: Paste Google Redirect URL below</p>
-            <input type="text" id="redirect_url" placeholder="https://www.google.com/?code=...&client=..." 
-                   style="width: 100%; padding: 10px; background: #2b2b2b; border: 1px solid #555; color: white; border-radius: 4px; box-sizing: border-box;">
-            
-            <p style="margin-top: 15px; margin-bottom: 5px; color: #aaa; font-size: 0.9em;">Step 3: Resolve Token (Standard Form Submission)</p>
-            <button onclick="resolveToken()" 
-                    style="width: 100%; padding: 10px; background: #FF4B4B; border: none; color: white; border-radius: 4px; cursor: pointer; font-weight: bold;">
-                Open Token Generator 🚀 (CORS-Immune)
-            </button>
-            <p style="margin-top: 10px; font-size: 0.8em; color: #888;">Note: This will open a <b>New Tab</b> with a JSON response. <b>Copy the 'token' string</b> from that tab and paste it into the field below.</p>
-            
-            <div id="error_area" style="margin-top: 15px; color: #ff4b4b; display: none; font-size: 0.9em;"></div>
-        </div>
-
-        <script src="https://cdnjs.cloudflare.com/ajax/libs/crypto-js/4.1.1/crypto-js.min.js"></script>
-        <script>
-        function resolveToken() {{
-            const urlInput = document.getElementById('redirect_url').value;
-            const errorArea = document.getElementById('error_area');
-            errorArea.style.display = 'none';
-            
-            try {{
-                const url = new URL(urlInput);
-                const requestCode = url.searchParams.get('code');
-                if (!requestCode) throw new Error("Could not find 'code' in the URL. Please ensure you copied the full Google URL.");
-                
-                const apiKey = "{API_KEY}";
-                const apiSecret = "{API_SECRET}";
-                const hashInput = apiKey + requestCode + apiSecret;
-                const apiSecretHash = CryptoJS.SHA256(hashInput).toString();
-                
-                // CREATE A HIDDEN FORM AND SUBMIT IT (Invincible against CORS)
-                var form = document.createElement('form');
-                form.method = 'POST';
-                form.action = 'https://authapi.flattrade.in/trade/apitoken';
-                form.target = '_blank'; // Open in a new tab
-                
-                var fields = {{
-                    "api_key": apiKey,
-                    "request_code": requestCode,
-                    "api_secret": apiSecretHash
-                }};
-                
-                for (var key in fields) {{
-                    var input = document.createElement('input');
-                    input.type = 'hidden';
-                    input.name = key;
-                    input.value = fields[key];
-                    form.appendChild(input);
-                }}
-                
-                document.body.appendChild(form);
-                form.submit();
-                document.body.removeChild(form);
-                
-            }} catch (err) {{
-                errorArea.innerText = "❌ Error: " + err.message;
-                errorArea.style.display = 'block';
-            }}
-        }}
-        </script>
-        """
-        st.components.v1.html(cloud_helper_html, height=300)
-
-    st.divider()
-    
-    # Manual Token Injection (Fix for Cloud INVALID_IP)
-    with st.expander("💉 Manual Token Injection (Cloud Fallback)"):
-        st.info("If Auto Login fails on Streamlit Cloud due to `INVALID_IP`, run the app once **locally** on your PC and paste the generated `jKey` here.")
-        manual_token = st.text_input("Enter Flattrade Session Token (jKey)", type="password", key="manual_token_input")
-        if st.button("Save Manual Token"):
-            if manual_token:
-                # Use the API_KEY defined in the Flattrade section
-                try:
-                    flat_auth = {"api_key": API_KEY, "token": manual_token}
-                    with open("flattrade_auth.json", "w") as f:
-                        json.dump(flat_auth, f, indent=4)
-                    st.success("Manual token saved to `flattrade_auth.json`!")
-                    st.rerun()
-                except NameError:
-                    st.error("API Key not found. Please ensure Flattrade credentials are set.")
-            else:
-                st.warning("Please enter a valid token.")
-
-    st.divider()
-    
-    # Credential Manager
-    with st.expander("🔐 Credential Manager"):
-        st.write("Update your Flattrade credentials below. Changes will be saved to `credentials.json`.")
-        
-        # Load current credentials
-        curr_creds = {}
-        if os.path.exists('credentials.json'):
-            try:
-                with open('credentials.json', 'r') as f:
-                    curr_creds = json.load(f)
-            except:
-                pass
-        
-        with st.form("credential_manager_form"):
-            new_user = st.text_input("Username", value=curr_creds.get('username', ''))
-            new_pass = st.text_input("Password", value=curr_creds.get('password', ''), type="password")
-            new_totp = st.text_input("TOTP Key", value=curr_creds.get('totp_key', ''), type="password")
-            
-            if st.form_submit_button("💾 UPDATE CREDENTIALS", use_container_width=True):
-                if new_user and new_pass and new_totp:
-                    # Update credentials.json
-                    curr_creds['username'] = new_user
-                    curr_creds['password'] = new_pass
-                    curr_creds['totp_key'] = new_totp
-                    
-                    with open('credentials.json', 'w') as f:
-                        json.dump(curr_creds, f, indent=4)
-                    
-                    st.success("Credentials updated successfully!")
-                    time.sleep(1)
-                    st.rerun()
+                        st.session_state.last_error = "INVALID_IP"
+                        st.error("Token Generation Blocked (INVALID_IP). Use the 'Cloud Token Resolver' below.")
+                        status.update(label="Token Generation Failed (Cloud Blocked)", state="error")
                 else:
-                    st.error("All fields are required.")
+                    st.error(f"Automation failed: {result.get('message')}")
+                    status.update(label="Automation Failed", state="error")
+        except Exception as e:
+            st.error(f"Error: {e}")
+
+    # --- CLOUD TOKEN RESOLVER (IP BYPASS) ---
+    resolver_expanded = bool(st.session_state.resolver_code)
+    with st.expander("🌐 Cloud Token Resolver (Bypass INVALID_IP)", expanded=resolver_expanded):
+        if resolver_expanded:
+            st.warning("⚠️ **Cloud Block Detected**: The request code has been captured. Click RESOLVE below to finish login using your Resident IP.")
+        else:
+            st.info("Paste your request_code below to exchange it using your Resident IP.")
+        
+        resolver_code = st.text_input("Captured Code", value=st.session_state.resolver_code, key="resolver_input")
+        st.session_state.resolver_code = resolver_code
+        
+        import hashlib
+        res_hash = hashlib.sha256((API_KEY + resolver_code + API_SECRET).encode()).hexdigest() if resolver_code else ""
+        
+        # JS Fetch Component
+        components.html(f"""
+            <div style="background:#0d1117; padding:12px; border-radius:8px; border:1px solid #30363d; font-family:sans-serif; color:white;">
+                <button id="resBtn" style="width:100%; padding:10px; background:#238636; color:white; border:none; border-radius:6px; cursor:pointer; font-weight:600; margin-bottom:10px;">
+                    🔓 RESOLVE TOKEN (Local IP)
+                </button>
+                <div id="resStat" style="font-size:0.85rem; color:#8b949e; word-break:break-all;">Ready...</div>
+            </div>
+            <script>
+                const btn = document.getElementById('resBtn');
+                const stat = document.getElementById('resStat');
+                btn.onclick = async () => {{
+                    const code = "{resolver_code}";
+                    if(!code) {{ stat.innerText = "❌ Paste Code First!"; return; }}
+                    stat.innerText = "⏳ Exchanging via Resident IP...";
+                    try {{
+                        const res = await fetch("https://authapi.flattrade.in/trade/apitoken", {{
+                            method: "POST",
+                            headers: {{ "Content-Type": "application/json" }},
+                            body: JSON.stringify({{ api_key: "{API_KEY}", request_code: code, api_secret: "{res_hash}" }})
+                        }});
+                        const data = await res.json();
+                        if(data.stat === "Ok") {{
+                            stat.innerHTML = "✅ <b>SUCCESS!</b><br>Copy this token:<br><code style='color:#58a6ff'>" + data.token + "</code>";
+                        }} else {{
+                            stat.innerText = "❌ API Error: " + (data.emsg || "Unknown");
+                        }}
+                    }} catch(e) {{
+                        stat.innerText = "❌ Connection Blocked/Failed.";
+                    }}
+                }};
+            </script>
+        """, height=150)
+        
+        st.caption("Copy the generated token above and paste it into 'Fallback' below to save.")
+
+
 
     st.divider()
     st.subheader("📂 Manual Login (Fallback)")
-    st.info("Follow these steps if automated login fails:")
-    st.markdown(f"1. Open the [Flattrade Auth URL]({AUTH_URL}) in your browser.")
-    st.markdown("2. Log in and authorize the application.")
-    st.markdown("3. Copy the `request_code` from the redirect URL (it looks like `?code=...`).")
-    
     st.link_button("Open Flattrade Auth", AUTH_URL, use_container_width=True)
-    
     with st.form("flattrade_login_form"):
         input_data = st.text_input("Enter request_code or full redirect URL")
         submit_flat = st.form_submit_button("GENERATE TOKEN (MANUAL)", use_container_width=True)
-        
         if submit_flat:
-            if not input_data:
-                st.warning("Please enter the request_code or URL.")
-            else:
-                try:
-                    # Use regex to extract code if input is a URL
-                    code_match = re.search(r"[?&]code=([^&#]+)", input_data)
-                    request_code = code_match.group(1) if code_match else input_data
-                    
-                    import hashlib
-                    hash_value = hashlib.sha256((API_KEY + request_code + API_SECRET).encode()).hexdigest()
-                    payload = {"api_key": API_KEY, "request_code": request_code, "api_secret": hash_value}
+            try:
+                code_match = re.search(r"[?&]code=([^&#]+)", input_data)
+                request_code = code_match.group(1) if code_match else input_data
+                import hashlib
+                hash_value = hashlib.sha256((API_KEY + request_code + API_SECRET).encode()).hexdigest()
+                payload = {"api_key": API_KEY, "request_code": request_code, "api_secret": hash_value}
+                response = requests.post(TOKEN_URL, json=payload)
+                if response.status_code == 200:
+                    data = response.json()
+                    if data.get("stat") == "Ok":
+                        st.success("Access token generated successfully!")
+                        flat_auth = {"api_key": API_KEY, "token": data['token']}
+                        with open("flattrade_auth.json", "w") as f:
+                            json.dump(flat_auth, f, indent=4)
+                    else: st.error(data.get('emsg'))
+                else: st.error(f"HTTP {response.status_code}")
+            except Exception as e: st.error(f"Error: {e}")
 
-                    with st.spinner("Generating access token..."):
-                        response = requests.post(TOKEN_URL, json=payload)
-                    
-                    if response.status_code == 200:
-                        data = response.json()
-                        if data.get("stat") == "Ok":
-                            st.success("Access token generated successfully!")
-                            token = data['token']
-                            st.code(token, language="text")
-                            
-                            flat_auth = {"api_key": API_KEY, "token": token}
-                            with open("flattrade_auth.json", "w") as f:
-                                json.dump(flat_auth, f, indent=4)
-                            st.info("Token saved to `flattrade_auth.json`")
-                        else:
-                            st.error(f"Error: {data.get('emsg', 'Unknown error')}")
-                    else:
-                        st.error(f"Failed to generate access token. HTTP Status: {response.status_code}")
-                except Exception as e:
-                    st.error(f"An error occurred: {e}")
+
+
+
+
+
+
+
+
+
+
 
 elif menu == "📦 Order Portal": # Order Portal
     st.header("📦 Flattrade Auto-Order Hub")
-    # ---------------- AUTOMATION UI ----------------
+    
     @st.fragment(run_every="1s")
     def automation_monitor_ui():
-        ltp = 0.0
-        data_available = False
-        try:
-            DATA_FILE = "market_data.json"
-            if os.path.exists(DATA_FILE):
-                with open(DATA_FILE, "r") as f:
-                    data = json.load(f)
-                ltp = data.get("ltp", 0.0)
-                strend_data = data.get("supertrend", [])
-                strend_val = data.get("live_strend", strend_data[-1].get("value", 0.0) if strend_data else 0.0)
-                strend_trend = data.get("live_trend", strend_data[-1].get("trend", 0) if strend_data else 0)
-                ema_data = data.get("ema", [])
-                ema_val = data.get("live_ema", ema_data[-1].get("value", 0.0) if ema_data else 0.0)
-                data_available = True
-        except:
-             pass
-
-        # 3. UI Display (Market Feed & Logs)
+        ltp = st.session_state.get('current_ltp', 0.0)
+        ema_val = st.session_state.get('live_ema', 0.0)
+        logs = st.session_state.get('trading_logs', [])
+        
         col_m1, col_m2 = st.columns([1, 1])
         with col_m1:
             st.subheader("Live Market Feed")
-            if data_available:
-                st.metric("LTP", f"{ltp:.2f}", delta=f"{ltp-ema_val:.2f} (vs EMA)")
-                st.write(f"**EMA (200):** {ema_val:.2f}")
-                st.write(f"**Supertrend:** {strend_val:.2f} ({'🟢 UP' if strend_trend == 1 else '🔴 DOWN'})")
-            else:
-                st.info("Waiting for market data...")
-        
+            st.metric("LTP", f"₹{ltp:.2f}", delta=f"{ltp-ema_val:.2f} (vs EMA)")
+            st.write(f"**EMA (200):** {ema_val:.2f}")
         with col_m2:
             st.subheader("Activity Logs")
             log_container = st.container(height=300)
             with log_container:
-                for log in reversed(st.session_state.trading_logs):
+                for log in reversed(logs):
                     st.write(log)
 
     col1, col2 = st.columns(2)
-    
     with col1:
         st.subheader("Configuration")
-        trade_tsym = st.text_input("Trading Symbol (tsym)", value=st.session_state.trade_tsym_input, key="trade_tsym_input_ui")
-        st.session_state.trade_tsym_input = trade_tsym # PERSIST: Update the source value so it stays on tab switch
+        trade_tsym = st.text_input("Trading Symbol (tsym)", value=st.session_state.get('trade_tsym_input', ''))
+        st.session_state.trade_tsym_input = trade_tsym
         st.session_state.trade_tsym = trade_tsym
         
-        trade_num_lots = st.number_input("Number of Lots (n)", value=1, min_value=1, step=1, key="trade_num_lots_input_p")
+        qty = st.number_input("Total Quantity", value=st.session_state.get('trade_qty', 1), min_value=1)
+        st.session_state.trade_qty = qty
         
-        # Determine Lot Size automatically based on index
-        default_lot = 65 
-        if "BANKNIFTY" in trade_tsym: default_lot = 15
-        elif "FINNIFTY" in trade_tsym: default_lot = 40
-        elif "SENSEX" in trade_tsym: default_lot = 20
-        
-        trade_lot_size = st.number_input("Lot Size (m)", value=default_lot, min_value=1, step=1, key="trade_lot_size_input_p")
-        
-        total_qty = trade_num_lots * trade_lot_size
-        st.write(f"**Total Quantity:** {total_qty}")
-        st.session_state.trade_qty = total_qty
-        
-        exch_map = {"NSE": 1, "NFO": 2, "MCX": 5, "BSE": 3, "CDS": 13, "BFO": 4}
-        exch_keys = list(exch_map.keys())
-        
-        # Determine Default Exchange based on tsym
-        default_exch_idx = 1 # Default NFO
-        if "SENSEX" in trade_tsym.upper() or "BANKEX" in trade_tsym.upper():
-            default_exch_idx = exch_keys.index("BFO")
-        elif "NIFTY" in trade_tsym.upper():
-            default_exch_idx = exch_keys.index("NFO")
-            
-        trade_exch = st.selectbox("Exchange (exch)", options=exch_keys, index=default_exch_idx, key="trade_exch_input_p")
+        trade_exch = st.selectbox("Exchange", options=["NFO", "BFO", "NSE", "BSE"], index=0)
         st.session_state.trade_exch = trade_exch
         
         st.divider()
-        
-        # Strategy Monitor
-        st.subheader("Strategy Monitor")
-        m_c1, m_c2 = st.columns(2)
-        with m_c1:
-            st.write("**Next Action:**")
-            if st.session_state.trading_phase == 'WAIT_FOR_DIP':
-                color = "#58a6ff"
-                label = "WAIT FOR DIP"
-            elif st.session_state.trading_phase == 'BUY':
-                color = "#26a69a"
-                label = "BUY ON CROSS"
-            else:
-                color = "#ef5350"
-                label = "SELL ON CROSS"
-            st.markdown(f"<h3 style='color: {color}; margin:0;'>{label}</h3>", unsafe_allow_html=True)
-        with m_c2:
-            st.write("**Status:**")
-            st.write("🟢 Active" if st.session_state.auto_trading_active else "🔴 Paused")
-
-        st.divider()
-        
-        if not st.session_state.auto_trading_active:
+        if not st.session_state.get('auto_trading_active', False):
             if st.button("🚀 START AUTO TRADING", type="primary", use_container_width=True):
-                if not st.session_state.backend_running:
-                    st.error("Backend System is Offline! Start it in the Dashboard first.")
-                else:
-                    st.session_state.auto_trading_active = True
-                    st.session_state.trading_phase = 'WAIT_FOR_DIP' # INITIAL STATE
-                    st.session_state.last_order_side = None
-                    st.session_state.trading_logs.append(f"[{datetime.now().strftime('%H:%M:%S')}] 🤖 Strategy Activated. Waiting for Price to drop below EMA...")
-                    st.rerun()
+                st.session_state.auto_trading_active = True
+                st.session_state.trading_phase = 'WAIT_FOR_DIP'
+                st.session_state.trading_logs.append(f"[{datetime.now().strftime('%H:%M:%S')}] 🤖 Strategy Activated.")
+                st.rerun()
         else:
-            if st.button("🛑 STOP AUTO TRADING", type="secondary", use_container_width=True):
-                # AUTO CLOSE: If a BUY order was placed (phase is SELL), apply a SELL order before stopping
-                if st.session_state.trading_phase == 'SELL':
-                    tsym = st.session_state.get('trade_tsym')
-                    qty = st.session_state.get('trade_qty', 0)
-                    exch = st.session_state.get('trade_exch')
-                    
-                    if tsym and qty > 0 and exch:
-                        st.session_state.trading_logs.append(f"[{datetime.now().strftime('%H:%M:%S')}] 🛑 Stopping. Closing open position first...")
-                        res = place_flattrade_order(tsym, qty, exch, 'S')
-                        if res.get('stat') == 'Ok':
-                            st.session_state.trading_logs.append(f"[{datetime.now().strftime('%H:%M:%S')}] ✅ AUTO SELL (STOP-CLOSE): {tsym} @ Market")
-                        else:
-                            st.session_state.trading_logs.append(f"[{datetime.now().strftime('%H:%M:%S')}] ❌ STOP-CLOSE FAILED: {res.get('emsg')}")
-                
+            if st.button("🛑 STOP AUTO TRADING", use_container_width=True):
                 st.session_state.auto_trading_active = False
                 st.session_state.trading_logs.append(f"[{datetime.now().strftime('%H:%M:%S')}] 🛑 Strategy Stopped.")
                 st.rerun()
 
     with col2:
-        # Combined Monitor Fragment Call
         automation_monitor_ui()
-        
-        if st.button("🗑️ Clear Logs"):
-            st.session_state.trading_logs = []
-            st.session_state.last_order_side = None
-            st.rerun()
 
 elif menu == "📦 Scrip Master":
     st.header("📦 Scrip Master")
     
+    # Balance Fragment
     @st.fragment
     def flattrade_balance_fragment():
         if st.button("💰 Show Flattrade Balance", use_container_width=True):
@@ -924,33 +785,23 @@ elif menu == "📦 Scrip Master":
                 try:
                     with open('flattrade_auth.json', 'r') as f:
                         token = json.load(f).get('token')
-                    uid = os.environ.get('FT_USERNAME')
-                    if not uid and os.path.exists('credentials.json'):
-                        with open('credentials.json', 'r') as f:
-                            uid = json.load(f).get('username')
-                    
+                    uid = os.environ.get('FT_USERNAME', "K135836")
                     if token and uid:
                         url = "https://piconnect.flattrade.in/PiConnectAPI/Limits"
                         payload = 'jData=' + json.dumps({"uid": uid, "actid": uid}) + '&jKey=' + token
                         res = requests.post(url, data=payload).json()
                         if res.get('stat') == 'Ok':
-                            cash = float(res.get('cash', 0.0))
-                            payin = float(res.get('payin', 0.0))
-                            margin = float(res.get('marginused', 0.0))
-                            total = cash + payin - margin
-                            st.success(f"**Available Trading Margin:** ₹{total:,.2f}")
-                        else:
-                            st.error(f"Failed to fetch balance: {res.get('emsg')}")
-                    else:
-                        st.warning("Flattrade credentials missing. Please log in first.")
-                except Exception as e:
-                    st.error(f"Error fetching balance: {e}")
+                            total = float(res.get('cash', 0.0)) + float(res.get('payin', 0.0)) - float(res.get('marginused', 0.0))
+                            st.success(f"**Available Training Margin:** ₹{total:,.2f}")
+                        else: st.error(res.get('emsg'))
+                    else: st.warning("Login first.")
+                except Exception as e: st.error(str(e))
                     
     flattrade_balance_fragment()
     st.divider()
-    
+
     # Live Indices Banner
-    st.subheader("🌕 Live Market Indices")
+    st.subheader("🌙 Live Market Indices")
     indices_banner_fragment()
     st.divider()
     
@@ -959,74 +810,34 @@ elif menu == "📦 Scrip Master":
     @st.cache_data(ttl=86400) # Cache for 24 hours
     def fetch_scrip_master():
         LOCAL_SCRIP_CACHE = "scrip_master.json"
-        
-        # 1. Try Loading from Local Cache first (if fresh)
         if os.path.exists(LOCAL_SCRIP_CACHE):
             try:
-                mtime = os.path.getmtime(LOCAL_SCRIP_CACHE)
-                if time.time() - mtime < 86400: # 24 hours
-                    with open(LOCAL_SCRIP_CACHE, "r") as f:
-                        return json.load(f)
-            except Exception as fe:
-                print(f"Cache Load Error: {fe}")
+                if time.time() - os.path.getmtime(LOCAL_SCRIP_CACHE) < 86400:
+                    with open(LOCAL_SCRIP_CACHE, "r") as f: return json.load(f)
+            except: pass
 
-        # 2. Fetch from URL
         try:
             with st.spinner("Downloading scrip master (~30MB)..."):
                 response = requests.get(SCRIP_MASTER_URL, timeout=60)
                 if response.status_code == 200:
                     data = response.json()
-                    # Save to cache
-                    try:
-                        with open(LOCAL_SCRIP_CACHE, "w") as f:
-                            json.dump(data, f)
-                    except:
-                        pass
+                    with open(LOCAL_SCRIP_CACHE, "w") as f: json.dump(data, f)
                     return data
-                else:
-                    st.error(f"Scrip Master Fetch Failed: HTTP {response.status_code}")
-                    return None
-        except requests.exceptions.Timeout:
-            st.error("Scrip Master Fetch Timeout (60s). Try refreshing or check internet.")
-        except Exception as e:
-            st.error(f"Scrip Master Request Error: {str(e)}")
-        
-        # 3. Fallback to old cache even if stale
-        if os.path.exists(LOCAL_SCRIP_CACHE):
-            try:
-                with open(LOCAL_SCRIP_CACHE, "r") as f:
-                    st.warning("Using stale scrip master data from cache.")
-                    return json.load(f)
-            except:
-                pass
+        except: pass
         return None
 
     def get_flattrade_tsym(token_data):
         try:
             name = token_data['name'].strip().upper()
-            raw_exp = token_data['expiry'].strip().upper()
-            dt = datetime.strptime(raw_exp, '%d%b%Y')
-            
-            strike_val = pd.to_numeric(token_data['strike'], errors='coerce') / 100
-            strike = f"{strike_val:.0f}"
-            
-            exch = token_data['exch_seg']
-            
-            if exch in ['BFO', 'BSE']:
-                # SENSEX BFO format: [NAME][YY][MMM][STRIKE][CE/PE]
-                exp_fmt = dt.strftime('%y%b').upper()
-                opt_type = 'CE' if token_data['symbol'].endswith('CE') else 'PE'
-                return f"{name}{exp_fmt}{strike}{opt_type}"
-            else:
-                # NFO format: [NAME][DD][MMM][YY][C/P][STRIKE]
-                exp_fmt = dt.strftime('%d%b%y').upper()
-                opt_type = 'C' if token_data['symbol'].endswith('CE') else 'P'
-                return f"{name}{exp_fmt}{opt_type}{strike}"
-        except:
-            return "N/A"
+            dt = datetime.strptime(token_data['expiry'].strip().upper(), '%d%b%Y')
+            strike = f"{pd.to_numeric(token_data['strike'], errors='coerce') / 100:.0f}"
+            if token_data['exch_seg'] in ['BFO', 'BSE']:
+                return f"{name}{dt.strftime('%y%b').upper()}{strike}{'CE' if token_data['symbol'].endswith('CE') else 'PE'}"
+            return f"{name}{dt.strftime('%d%b%y').upper()}{'C' if token_data['symbol'].endswith('CE') else 'P'}{strike}"
+        except: return "N/A"
 
     def render_token_card(title, token_data, color):
-        if token_data is not None:
+        if token_data:
             tsym = get_flattrade_tsym(token_data)
             st.markdown(f"""
             <div style="background-color: #161b22; border: 1px solid {color}; border-radius: 12px; padding: 20px; text-align: center;">
@@ -1034,90 +845,41 @@ elif menu == "📦 Scrip Master":
                 <div style="color: {color}; font-size: 1.8rem; font-weight: 800; margin-bottom: 5px;">{token_data['symbol']}</div>
                 <div style="background-color: #0d1117; padding: 5px; border-radius: 4px; color: #58a6ff; font-family: monospace; font-size: 1.1rem; margin: 10px 0;">{tsym}</div>
                 <div style="color: #8b949e; font-size: 1.2rem; font-weight: 600;">ID: {token_data['token']}</div>
-                <div style="color: #8b949e; font-size: 0.8rem; margin-top: 10px;">Exchange: {token_data['exch_seg']}</div>
             </div>
             """, unsafe_allow_html=True)
             if st.button(f"📊 Track {token_data['symbol']}", key=f"track_{token_data['token']}", use_container_width=True):
                 st.session_state.dashboard_token = str(token_data['token'])
                 st.session_state.dashboard_exchange = token_data['exch_seg']
-                
-                # Update Unified Backend Config
-                with open("dashboard_config.json", "w") as f:
-                    json.dump({
-                        "token": str(token_data['token']),
-                        "exch": token_data['exch_seg'],
-                        "range": st.session_state.get('dashboard_range', 0.05)
-                    }, f)
-                
-                # Sync with Order Portal
                 st.session_state.trade_tsym_input = tsym
                 st.session_state.trade_tsym = tsym
-                st.toast(f"🚀 {token_data['symbol']} loaded into Dashboard & Order Portal!")
-        else:
-            st.info(f"No {title} data found")
+                st.toast(f"🚀 {token_data['symbol']} loaded!")
+        else: st.info(f"No {title} data found")
 
     raw_data = fetch_scrip_master()
-    if not raw_data:
-        st.error("Failed to load scrip master.")
-    else:
+    if raw_data:
         df = pd.DataFrame(raw_data)
-        
-        # UI Selection Flow
         st.subheader("Tiered Selection")
         col1, col2, col3 = st.columns(3)
-        
         with col1:
-            instr_options = ["NIFTY", "SENSEX"]
-            new_instr = st.selectbox("Select Index", options=instr_options)
-            if new_instr != st.session_state.selected_instrument:
-                st.session_state.selected_instrument = new_instr
-                st.session_state.selected_expiry = None
-                st.session_state.selected_strike = None
-                st.rerun()
-
-        # Filtering for Expiries
-        filtered_df = df[df['name'] == st.session_state.selected_instrument]
-        if st.session_state.selected_instrument == 'SENSEX':
-            filtered_df = filtered_df[filtered_df['exch_seg'].isin(['BFO', 'BSE'])]
-        else:
-            filtered_df = filtered_df[filtered_df['exch_seg'] == 'NFO']
-            
-        exp_list = sorted(
-            [e for e in list(set(filtered_df['expiry'].dropna().str.strip().str.upper())) if e],
-            key=lambda x: datetime.strptime(x, '%d%b%Y')
-        )
-        
+            instr = st.selectbox("Select Index", options=["NIFTY", "SENSEX"])
+        filtered_df = df[df['name'] == instr]
+        filtered_df = filtered_df[filtered_df['exch_seg'].isin(['BFO', 'BSE'])] if instr == 'SENSEX' else filtered_df[filtered_df['exch_seg'] == 'NFO']
+        exp_list = sorted(list(set(filtered_df['expiry'].dropna().str.strip().str.upper())), key=lambda x: datetime.strptime(x, '%d%b%Y'))
         with col2:
-            new_exp = st.selectbox("Select Expiry", options=[None] + exp_list, index=0 if not st.session_state.selected_expiry else exp_list.index(st.session_state.selected_expiry)+1)
-            if new_exp != st.session_state.selected_expiry:
-                st.session_state.selected_expiry = new_exp
-                st.session_state.selected_strike = None
-                st.rerun()
-
-        if st.session_state.selected_expiry:
-            exp_df = filtered_df[filtered_df['expiry'].str.strip().str.upper() == st.session_state.selected_expiry]
-            strike_list = sorted(list(set(pd.to_numeric(exp_df['strike'], errors='coerce') / 100)))
-            strike_list = [f"{s:.0f}" for s in strike_list]
-            
+            exp = st.selectbox("Select Expiry", options=[None] + exp_list)
+        if exp:
+            exp_df = filtered_df[filtered_df['expiry'].str.strip().str.upper() == exp]
+            strike_list = sorted([f"{s:.0f}" for s in set(pd.to_numeric(exp_df['strike'], errors='coerce') / 100)])
             with col3:
-                new_strike = st.selectbox("Select Strike", options=[None] + strike_list, index=0 if not st.session_state.selected_strike else strike_list.index(st.session_state.selected_strike)+1)
-                if new_strike != st.session_state.selected_strike:
-                    st.session_state.selected_strike = new_strike
-                    st.rerun()
+                strike = st.selectbox("Select Strike", options=[None] + strike_list)
+            if strike:
+                st.divider()
+                s_float = float(strike) * 100
+                final_df = exp_df[pd.to_numeric(exp_df['strike'], errors='coerce') == s_float]
+                ce = final_df[final_df['symbol'].str.endswith('CE')].to_dict('records')
+                pe = final_df[final_df['symbol'].str.endswith('PE')].to_dict('records')
+                c1, c2 = st.columns(2)
+                with c1: render_token_card("CALL OPTION", ce[0] if ce else None, "#26a69a")
+                with c2: render_token_card("PUT OPTION", pe[0] if pe else None, "#ef5350")
 
-        if st.session_state.selected_strike:
-            st.divider()
-            strike_float = float(st.session_state.selected_strike) * 100
-            final_df = exp_df[pd.to_numeric(exp_df['strike'], errors='coerce') == strike_float]
-            
-            ce_token = final_df[final_df['symbol'].str.endswith('CE', na=False)].to_dict('records')
-            pe_token = final_df[final_df['symbol'].str.endswith('PE', na=False)].to_dict('records')
-            
-            c1, c2 = st.columns(2)
-            with c1: render_token_card("CALL OPTION", ce_token[0] if ce_token else None, "#26a69a")
-            with c2: render_token_card("PUT OPTION", pe_token[0] if pe_token else None, "#ef5350")
-            
-            if st.button("Clear Selection"):
-                st.session_state.selected_expiry = None
-                st.session_state.selected_strike = None
-                st.rerun()
+
