@@ -93,9 +93,11 @@ def safe_get_secret(key, default=None):
     """Safely get a secret from streamlit secrets or environment variables."""
     try:
         import streamlit as st
-        if key in st.secrets:
-            return st.secrets[key]
-    except Exception:
+        # Robust lookup: try direct, then .get, then fallback to env
+        val = st.secrets.get(key)
+        if val is not None:
+            return val
+    except:
         pass
     return os.environ.get(key, default)
 
@@ -120,6 +122,10 @@ def auto_login(creds=None, headless=False, log_func=None):
             'proxy_pass': safe_get_secret('FT_PROXY_PASS'),
             'use_proxy': str(safe_get_secret('FT_USE_PROXY', 'false')).lower() == 'true'
         }
+        
+        log(f"DEBUG: Proxy Flag Found -> {creds['use_proxy']} ({safe_get_secret('FT_USE_PROXY', 'not_found')})")
+        if creds['use_proxy']:
+            log(f"DEBUG: Proxy Config -> {creds['proxy_host']}:{creds['proxy_port']}")
         
         # Check if login credentials are found in environment
         if not all([creds['username'], creds['password'], creds['totp_key'], creds['api_key'], creds['api_secret']]):

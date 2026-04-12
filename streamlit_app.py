@@ -29,9 +29,11 @@ STOP_FILE = "stop_indices.txt"
 def safe_get_secret(key, default=None):
     """Safely get a secret from streamlit secrets or environment variables."""
     try:
-        if key in st.secrets:
-            return st.secrets[key]
-    except Exception:
+        import streamlit as st
+        val = st.secrets.get(key)
+        if val is not None:
+            return val
+    except:
         pass
     return os.environ.get(key, default)
 
