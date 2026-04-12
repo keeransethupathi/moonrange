@@ -239,19 +239,9 @@ def auto_login(creds=None, headless=False, log_func=None):
                         except: pass
                         break
             
-            linux_chromedriver_path = '/opt/moon_range/chromedriver'
-            if not os.path.exists(linux_chromedriver_path):
-                linux_chromedriver_path = '/usr/bin/chromedriver' if os.path.exists('/usr/bin/chromedriver') else None
-            
             if linux_chrome_path:
                 chrome_options.binary_location = linux_chrome_path
-                driver = uc.Chrome(
-                    options=chrome_options, 
-                    browser_executable_path=linux_chrome_path, 
-                    driver_executable_path=linux_chromedriver_path,
-                    use_subprocess=True, 
-                    version_main=version_main
-                )
+                driver = uc.Chrome(options=chrome_options, browser_executable_path=linux_chrome_path, use_subprocess=True, version_main=version_main)
             else:
                 # Fallback for Windows or default search
                 driver = uc.Chrome(options=chrome_options, use_subprocess=True, version_main=version_main)
@@ -599,55 +589,6 @@ def generate_access_token(request_code, api_key=None, api_secret=None):
             return {"status": "error", "message": f"HTTP {response.status_code}: {response.text[:100]}"}
     except Exception as e:
         return {"status": "error", "message": f"Network error during token generation: {str(e)}"}
-
-def angel_one_login():
-    """Consolidated AngelOne Login Helper for 1-click connectivity."""
-    import json, os, requests, pyotp
-    
-    auth_data = {}
-    if os.path.exists("auth.json"):
-        try:
-            with open("auth.json", "r") as f: auth_data = json.load(f)
-        except: pass
-    
-    c_code = safe_get_secret("ANGEL_CLIENT_CODE", auth_data.get("client_code", "K135836"))
-    api_k = safe_get_secret("ANGEL_API_KEY", auth_data.get("api_key", "t0bsCNdW"))
-    totp_s = safe_get_secret("ANGEL_TOTP_SECRET", auth_data.get("totp_secret", "YGDC6I7VDV7KJSIELCN626FKBY"))
-    pwd = safe_get_secret("ANGEL_PASSWORD", "1997")
-    
-    if not all([c_code, api_k, totp_s, pwd]):
-        return False, "Missing credentials in secrets or auth.json"
-        
-    try:
-        totp = pyotp.TOTP(totp_s)
-        current_code = totp.now()
-        url = "https://apiconnect.angelone.in/rest/auth/angelbroking/user/v1/loginByPassword"
-        
-        payload = {"clientcode": c_code, "password": pwd, "totp": current_code, "state": "12345"}
-        headers = {
-            'Content-Type': 'application/json', 'Accept': 'application/json',
-            'X-UserType': 'USER', 'X-SourceID': 'WEB',
-            'X-ClientLocalIP': '127.0.0.1', 'X-ClientPublicIP': '127.0.0.1',
-            'X-MACAddress': 'MAC_ADDRESS', 'X-PrivateKey': api_k
-        }
-        
-        response = requests.post(url, headers=headers, data=json.dumps(payload))
-        if response.status_code == 200:
-            resp_json = response.json()
-            if resp_json.get('status'):
-                jwt_token = "Bearer " + resp_json['data']['jwtToken']
-                save_data = {
-                    "Authorization": jwt_token, "api_key": api_k,
-                    "feedtoken": resp_json['data']['feedToken'], "client_code": c_code
-                }
-                with open("auth.json", "w") as f:
-                    json.dump(save_data, f, indent=4)
-                return True, "Success"
-            else:
-                return False, resp_json.get('message')
-        return False, f"HTTP {response.status_code}"
-    except Exception as e:
-        return False, str(e)
 
 if __name__ == "__main__":
     result = auto_login()
