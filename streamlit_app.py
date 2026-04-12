@@ -864,7 +864,7 @@ elif menu == "📦 Scrip Master":
             instr = st.selectbox("Select Index", options=["NIFTY", "SENSEX"])
         filtered_df = df[df['name'] == instr]
         filtered_df = filtered_df[filtered_df['exch_seg'].isin(['BFO', 'BSE'])] if instr == 'SENSEX' else filtered_df[filtered_df['exch_seg'] == 'NFO']
-        exp_list = sorted(list(set(filtered_df['expiry'].dropna().str.strip().str.upper())), key=lambda x: datetime.strptime(x, '%d%b%Y'))
+        exp_list = sorted([x for x in set(filtered_df['expiry'].dropna().str.strip().str.upper()) if x], key=lambda x: datetime.strptime(x, '%d%b%Y'))
         with col2:
             exp = st.selectbox("Select Expiry", options=[None] + exp_list)
         if exp:
