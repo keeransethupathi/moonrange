@@ -794,6 +794,19 @@ elif menu == "📦 Order Portal": # Order Portal
                 st.rerun()
         else:
             if st.button("🛑 STOP AUTO TRADING", use_container_width=True):
+                # Auto-Exit Position if active
+                if st.session_state.get('trading_phase') == 'SELL':
+                    st.session_state.trading_logs.append(f"[{datetime.now().strftime('%H:%M:%S')}] ⚠️ Close position triggered by STOP button.")
+                    tsym = st.session_state.get('trade_tsym')
+                    qty = st.session_state.get('trade_qty', 1)
+                    exch = st.session_state.get('trade_exch')
+                    if tsym and qty > 0 and exch:
+                        res = place_flattrade_order(tsym, qty, exch, 'S')
+                        if res.get('stat') == 'Ok':
+                            st.session_state.trading_logs.append(f"[{datetime.now().strftime('%H:%M:%S')}] ✅ AUTO SELL (EXIT): {tsym} @ Market-Limit.")
+                        else:
+                            st.session_state.trading_logs.append(f"[{datetime.now().strftime('%H:%M:%S')}] ❌ EXIT SELL FAILED: {res.get('emsg')}")
+
                 st.session_state.auto_trading_active = False
                 st.session_state.trading_logs.append(f"[{datetime.now().strftime('%H:%M:%S')}] 🛑 Strategy Stopped.")
                 st.rerun()
