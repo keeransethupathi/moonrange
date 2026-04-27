@@ -735,6 +735,18 @@ elif menu == "📦 Order Portal": # Order Portal
     
     @st.fragment(run_every="1s")
     def automation_monitor_ui():
+        # Data Sync in fragment
+        DATA_FILE = "market_data.json"
+        try:
+            if os.path.exists(DATA_FILE):
+                with open(DATA_FILE, "r") as f:
+                    data = json.load(f)
+                if time.time() - data.get("last_update", 0) < 10:
+                    st.session_state.current_ltp = float(data.get("ltp", 0.0))
+                    st.session_state.live_ema = float(data.get("live_ema", 0.0))
+        except:
+            pass
+
         ltp = st.session_state.get('current_ltp', 0.0)
         ema_val = st.session_state.get('live_ema', 0.0)
         logs = st.session_state.get('trading_logs', [])
