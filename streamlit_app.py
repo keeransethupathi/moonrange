@@ -307,13 +307,17 @@ if 'selected_instrument' not in st.session_state:
 if 'selected_strike' not in st.session_state:
     st.session_state.selected_strike = None
 if 'dashboard_token' not in st.session_state:
-    st.session_state.dashboard_token = "486503"
+    st.session_state.dashboard_token = "488291"
 if 'dashboard_exchange' not in st.session_state:
     st.session_state.dashboard_exchange = "MCX"
 if 'trade_tsym_input' not in st.session_state:
     st.session_state.trade_tsym_input = "NIFTY24FEB26C26000"
 if 'trade_exch_input' not in st.session_state:
     st.session_state.trade_exch_input = "NFO"
+if 'trade_qty' not in st.session_state:
+    st.session_state.trade_qty = 65
+if 'trade_exch_idx' not in st.session_state:
+    st.session_state.trade_exch_idx = 0
 if 'dashboard_range' not in st.session_state:
     st.session_state.dashboard_range = 0.05
 if 'resolver_code' not in st.session_state:
@@ -742,6 +746,10 @@ elif menu == "📦 Order Portal": # Order Portal
             st.write(f"**EMA (200):** {ema_val:.2f}")
         with col_m2:
             st.subheader("Activity Logs")
+            if st.button("🗑️ Clear Logs", use_container_width=True):
+                st.session_state.trading_logs = []
+                st.rerun()
+                
             log_container = st.container(height=300)
             with log_container:
                 for log in reversed(logs):
@@ -751,13 +759,30 @@ elif menu == "📦 Order Portal": # Order Portal
     with col1:
         st.subheader("Configuration")
         trade_tsym = st.text_input("Trading Symbol (tsym)", value=st.session_state.get('trade_tsym_input', ''))
+        
+        # Sensex/Nifty Auto-Defaults
+        if trade_tsym != st.session_state.get('last_tsym_check'):
+            st.session_state.last_tsym_check = trade_tsym
+            sym_up = trade_tsym.upper()
+            if "SENSEX" in sym_up:
+                st.session_state.trade_qty = 20
+                st.session_state.trade_exch_idx = 1 # BFO
+            elif "NIFTY" in sym_up:
+                st.session_state.trade_qty = 65
+                st.session_state.trade_exch_idx = 0 # NFO
+
         st.session_state.trade_tsym_input = trade_tsym
         st.session_state.trade_tsym = trade_tsym
         
-        qty = st.number_input("Total Quantity", value=st.session_state.get('trade_qty', 1), min_value=1)
+        qty = st.number_input("Total Quantity", value=int(st.session_state.get('trade_qty', 1)), min_value=1)
         st.session_state.trade_qty = qty
         
-        trade_exch = st.selectbox("Exchange", options=["NFO", "BFO", "NSE", "BSE"], index=0)
+        exch_opts = ["NFO", "BFO", "NSE", "BSE"]
+        # Ensure index is within bounds
+        current_exch_idx = st.session_state.get('trade_exch_idx', 0)
+        if current_exch_idx >= len(exch_opts): current_exch_idx = 0
+        
+        trade_exch = st.selectbox("Exchange", options=exch_opts, index=current_exch_idx)
         st.session_state.trade_exch = trade_exch
         
         st.divider()
